@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+# portable Python dropped into the folder on Windows
+python/
+# files the tool writes when you run it
+probe.json
+p2s_calibration.zip
+*.jpg
+*.gcode
+!tests/fixtures/*.gcode
+*.bgc
+!tests/fixtures/*.bgc
+*.bgcode
+test.gcode
