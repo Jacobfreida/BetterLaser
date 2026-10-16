@@ -1170,7 +1170,12 @@ function dewarpCamera(){
 $("#connectBtn").onclick = async () => {
   if (status.connected){ await api("/api/disconnect", {}).catch(() => {}); status = {connected:false}; showStatus(); return; }
   $("#connectBtn").disabled = true; $("#connectBtn").textContent = "Connecting…";
-  try { const r = await api("/api/connect", {host:$("#host").value.trim() || "usb"}); toast(`Connected to ${r.info.deviceName || "the laser"}.`); await poll(); }
+  try {
+    const r = await api("/api/connect", {host:$("#host").value.trim() || "usb"}); await poll();
+    const c = r.info.compat || {}, notes = (c.findings || []).filter(f => f.level !== "ok");
+    if (!c.supported && c.findings) dialog("This laser isn't supported yet", `<p>${notes.map(f => f.message).join("</p><p>")}</p><p>You can still use the camera and design tools, but jobs won't be sent.</p>`, [["OK", true, "primary"]]);
+    else toast(`Connected to ${c.label || r.info.deviceName || "the laser"}.` + (notes.length ? " " + notes.map(f => f.message).join(" ") : ""));
+  }
   catch(e){ toast(e.message.includes("timed out") || e.message.includes("refused") ? "Couldn't reach the laser. Check the USB-C cable and power, and close xTool Studio completely." : e.message, true); }
   finally { $("#connectBtn").disabled = false; showStatus(); }
 };
@@ -1188,7 +1193,9 @@ function showStatus(){
   st.querySelector(".txt").textContent = c ? modeText(status) : "Not connected";
   const facts = st.querySelector(".facts"); facts.innerHTML = "";
   if (c){
-    const add = (t, w) => { const s = document.createElement("span"); s.className = "pill" + (w ? " warn" : ""); s.textContent = t; facts.append(s); };
+    const add = (t, w) => { const s = document.createElement("span"); s.className = "pill" + (w ? " warn" : ""); s.textContent = t; facts.append(s); return s; };
+    const cp = status.compat;
+    if (cp){ const sp = add(cp.label, !cp.supported); }
     if (status.lidClosed != null) add(status.lidClosed ? "Lid closed" : "Lid open", !status.lidClosed);
     if (status.keyIn != null) add(status.keyIn ? "Key in" : "Key out", !status.keyIn);
     if (status.alarms && status.alarms.length) add("Alarm: " + JSON.stringify(status.alarms).slice(0, 60), true);

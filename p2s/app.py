@@ -19,7 +19,7 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import bgc, design, fonts, gcode, xcs
+from . import compat, bgc, design, fonts, gcode, xcs
 from .device import P2S, DeviceError
 
 log = logging.getLogger("p2s.app")
@@ -78,7 +78,8 @@ class Machine:
             dev.on_event(self._event)
             self.dev, self.host = dev, host
             self.info = dev.machine_info() or {}
-            return self.info
+            self.compat = compat.describe(self.info)
+            return {**self.info, "compat": self.compat}
 
     def disconnect(self):
         if self.dev:
@@ -102,7 +103,8 @@ class Machine:
             return {"connected": False, "error": self.last_error}
         d = self.dev
         out = {"connected": True, "host": self.host, "name": self.info.get("deviceName"),
-               "firmware": (self.info.get("firmware") or {}).get("package_version")}
+               "firmware": (self.info.get("firmware") or {}).get("package_version"),
+               "compat": getattr(self, "compat", None)}
         try:
             st = d.status() or {}
             cm = st.get("curMode") or {}
@@ -454,6 +456,10 @@ class Handler(BaseHTTPRequestHandler):
                                    "has_raster": any(e.is_raster for e in job.elements)})
             if p == "/api/send":
                 text, job = job_text(b["design"])
+                c = getattr(MACHINE, "compat", None)
+                if c and not c["supported"]:
+                    return self._json({"error": "Not sending: " + next((f["message"] for f in c["findings"]
+                                                                        if f["level"] == "stop"), "this laser isn't supported")}, 400)
                 if any(e.is_raster for e in job.elements) and not raster_verified(job) and not b.get("allow_unverified"):
                     return self._json({"error": "Fill/photo engraving on the rotary isn't verified against Studio yet."}, 400)
                 try:

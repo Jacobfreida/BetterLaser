@@ -44,6 +44,18 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Load job on laser** uploads it in the same binary format Studio uses. Then press **Start**
   on the machine. Pause and Stop are in the top bar.
 
+## Which lasers it works with
+Built and verified on an xTool **P2S** (device code ZY013, hardware sub-type 004, 55 W, firmware
+40.22.011). xTool Studio drives every P2S with the same plugin and job format; the only P2S
+variants it knows are sub-types 001 and 004. When you connect, the app shows which laser it
+found, notes any differences (another sub-type, laser power or firmware), and refuses to send
+jobs to anything that isn't a P2S. To check a machine without moving anything:
+
+    p2s usb check
+
+It identifies the laser, tries every feature's read-only path (status, lid, key, height-sensor
+offset, head position, camera calibration, both cameras) and saves `check.json`.
+
 ## Status of each feature
 - Score/cut G-code is matched to Studio's output and tested on the machine.
 - Picture engraving reproduces a real Studio photo job line for line (73,073 lines, within 0.001 mm),
