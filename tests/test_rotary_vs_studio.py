@@ -31,7 +31,7 @@ for l in studio:
 xs = [p[0] for q in paths for p in q]; ys = [p[1] for q in paths for p in q]
 x0, y0, w, h = min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
 d = {"focal": 17, "fan_gear": 3, "purifier_gear": 2,
-     "rotary": {"type": "roller", "axis_y": AXIS},
+     "rotary": {"type": "roller", "axis_y": AXIS, "align": "edge"},
      "objects": [{"id": "hello", "type": "path", "x": x0, "y": y0, "w": w, "h": h, "rot": 0,
                   "nat_w": w, "nat_h": h, "paths": [[[px - x0, py - y0] for px, py in q] for q in paths],
                   "op": {"mode": "score", "power": 49, "speed": 20, "air": 100}}]}
@@ -81,10 +81,21 @@ print(f"Rotary job matches Studio: {len(a)} lines, {len(paths)} outlines; header
       f"T1 tool and tail identical; points within {worst:.4f} mm, start points within {start_off:.3f} mm")
 
 # chuck: same moves with U flipped, and M535U = 128 / circumference
-d["rotary"] = {"type": "chuck", "diameter": 80, "axis_y": AXIS}
+d["rotary"] = {"type": "chuck", "diameter": 80, "axis_y": AXIS, "align": "edge"}
 ch = gcode.generate(design.build_job(d)).splitlines()
 assert f"M535U{128 / (3.141592653589793 * 80)!r}" in ch
 u_roll = [float(m[1]) for l in ours for m in [re.match(r"G1U(-?[\d.]+)", l)] if m]
 u_chuck = [float(m[1]) for l in ch for m in [re.match(r"G1U(-?[\d.]+)", l)] if m]
 assert all(abs(p + q) < 1e-9 for p, q in zip(u_roll, u_chuck))
 print("Chuck mode: U mirrored, M535U = 128 / circumference")
+
+# centre alignment (the default): the middle of the design goes to the top of the object,
+# so U runs the same distance each way, wherever the design sits on the bed
+for dy in (0, -40):
+    d["rotary"] = {"type": "roller", "axis_y": AXIS}
+    d["objects"][0]["y"] = y0 + dy
+    g = bgc.normalize(gcode.generate(design.build_job(d))).splitlines()
+    us = [float(m[1]) for l in g for m in [re.match(r"G[01]U(-?[\d.]+)", l)] if m]
+    assert abs(min(us) + max(us)) < 0.002 and abs(max(us) - min(us) - h) < 0.002, (min(us), max(us))
+    assert len(g) == len(ours) and "G0Y125" in g
+print(f"Centre alignment: design spans U {min(us):.3f} to {max(us):.3f} (centred on the top of the object)")

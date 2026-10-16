@@ -204,8 +204,12 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
       <div id="rotFields" class="hidden grid2" style="margin-top:8px">
         <label class="f">Object held by<select id="rotType"><option value="roller">Rollers</option><option value="chuck">Chuck</option></select></label>
         <label class="f">Object diameter (mm)<input id="rotDia" type="number" min="5" max="300" step="0.1" placeholder="e.g. 80"></label>
-        <label class="f">Rotary line Y (mm)<input id="rotY" type="number" min="0" max="305" step="0.5"></label>
+        <label class="f" style="grid-column:1/3">Line up by<select id="rotAlign">
+          <option value="center">Centre of the design (put the object's centre line on top)</option>
+          <option value="edge">Edge on the rotary line (like xTool Studio)</option></select></label>
+        <label class="f">Laser line Y (mm)<input id="rotY" type="number" min="0" max="305" step="0.5"></label>
         <button class="btn" id="rotPick" style="align-self:end" title="Click the top line of the object on the bed or camera picture">Set on bed</button>
+        <button class="btn small" id="rotSnap" style="grid-column:1/3" title="Move the design so its centre sits on the laser line, to check it against the camera picture">Move design onto the laser line</button>
         <p class="muted" id="rotNote" style="grid-column:1/3;margin:0;line-height:1.4"></p>
       </div>
     </div>
@@ -249,7 +253,7 @@ let D = {focal:null, fan_gear:3, purifier_gear:4, objects:[]};
 // line at Y = axis_y. Everything drawn above that line (toward the back of the machine,
 // as in Studio) is wrapped onto the surface: a shape d mm above the line is engraved
 // d mm further round the object.
-const ROT_DEFAULT = {on:false, type:"roller", diameter:null, axis_y:125};
+const ROT_DEFAULT = {on:false, type:"roller", diameter:null, axis_y:125, align:"center"};
 const ROT_X0 = 50, ROT_X1 = 550;           // the rotary's working length (Studio's limits)
 const rotary = () => (D.rotary && D.rotary.on) ? D.rotary : null;
 const circumference = () => { const r = rotary(); return r && r.diameter > 0 ? Math.PI * r.diameter : null; };
@@ -305,7 +309,7 @@ function applyView(){ svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w}
 function fitView(){
   const r = svg.getBoundingClientRect(), pad = 22, aspect = r.width / Math.max(r.height, 1);
   // on the rotary, one full turn of surface may reach past the back of the bed
-  const c = circumference(), top = Math.min(0, c ? D.rotary.axis_y - c : 0), H = BED_H - top;
+  const band = rotaryBand(), top = Math.min(0, band ? band[0] : 0), H = Math.max(BED_H, band ? band[1] : 0) - top;
   let w = BED_W + 2 * pad, h = H + 2 * pad;
   if (w / h < aspect) w = h * aspect; else h = w / aspect;
   view = {x: BED_W / 2 - w / 2, y: top + H / 2 - h / 2, w, h}; applyView(); render();
@@ -341,26 +345,55 @@ function render(){
   if (measureMark) el("circle", {cx:measureMark.x, cy:measureMark.y, r:px() * 7, fill:"none", stroke:"#E0A100", "stroke-width":px() * 2.5}, svg);
 }
 
+// Top and bottom (bed y) of everything that will be engraved, rotation included.
+function designExtent(){
+  let y0 = Infinity, y1 = -Infinity;
+  for (const o of D.objects){
+    if (!o.op || o.op.mode === "off") continue;
+    const a = (o.rot || 0) * Math.PI / 180, hh = (Math.abs(o.w * Math.sin(a)) + Math.abs(o.h * Math.cos(a))) / 2, cy = o.y + o.h / 2;
+    y0 = Math.min(y0, cy - hh); y1 = Math.max(y1, cy + hh);
+  }
+  return isFinite(y0) ? [y0, y1] : null;
+}
+// The bed y that ends up on top of the object: the design's centre, or Studio's line.
+function rotaryRef(){
+  const r = rotary(); if (!r) return null;
+  const e = designExtent();
+  return r.align === "edge" || !e ? r.axis_y : (e[0] + e[1]) / 2;
+}
+// One full turn of surface on the bed: above the line (edge) or centred on the design (center).
+function rotaryBand(){
+  const r = rotary(), c = circumference(); if (!r || !c) return null;
+  if (r.align === "edge") return [r.axis_y - c, r.axis_y];
+  const m = rotaryRef(); return [m - c / 2, m + c / 2];
+}
 function drawRotary(){
   const r = rotary(); if (!r) return;
-  const y = r.axis_y, c = circumference(), k = px();
+  const y = r.axis_y, c = circumference(), k = px(), band = rotaryBand();
   const g = el("g", {"pointer-events":"none"}, svg);
   // outside the rotary's working length
   el("rect", {x:0, y:0, width:ROT_X0, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
   el("rect", {x:ROT_X1, y:0, width:BED_W - ROT_X1, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
-  // below the line is outside the work area (Studio's starts at the line and runs to the back)
-  if (y < BED_H) el("rect", {x:ROT_X0, y, width:ROT_X1 - ROT_X0, height:BED_H - y, fill:"rgba(20,24,28,.42)"}, g);
-  // one full turn of surface, unrolled above the top line
-  if (c){
-    el("rect", {x:ROT_X0, y:y - c, width:ROT_X1 - ROT_X0, height:c, fill:"rgba(233,220,194,.22)", stroke:"#E9DCC2", "stroke-width":k, "stroke-dasharray":`${k * 6} ${k * 4}`}, g);
-    const t = el("text", {x:ROT_X1 - k * 6, y:y - c + k * 15, "text-anchor":"end", fill:"#E9DCC2", "font-size":k * 11}, g);
-    t.textContent = `one full turn: ${c.toFixed(1)} mm`;
+  // edge mode: below the line is outside the work area (Studio's starts at the line and runs to the back)
+  if (r.align === "edge" && y < BED_H) el("rect", {x:ROT_X0, y, width:ROT_X1 - ROT_X0, height:BED_H - y, fill:"rgba(20,24,28,.42)"}, g);
+  if (band){
+    el("rect", {x:ROT_X0, y:band[0], width:ROT_X1 - ROT_X0, height:c, fill:"rgba(233,220,194,.22)", stroke:"#E9DCC2", "stroke-width":k, "stroke-dasharray":`${k * 6} ${k * 4}`}, g);
+    const lbl = `one full turn: ${c.toFixed(1)} mm`;
+    el("rect", {x:ROT_X1 - k * 7 * lbl.length * 0.82, y:band[0] + k * 2, width:k * 7 * lbl.length * 0.82, height:k * 18, rx:k * 3, fill:"rgba(20,24,28,.75)"}, g);
+    el("text", {x:ROT_X1 - k * 6, y:band[0] + k * 15, "text-anchor":"end", fill:"#E9DCC2", "font-size":k * 11}, g).textContent = lbl;
   }
+  const tag = (ty, text, color) => {
+    el("rect", {x:ROT_X0, y:ty - k * 14, width:k * 7 * text.length * 0.86, height:k * 20, rx:k * 3, fill:"rgba(20,24,28,.82)"}, g);
+    el("text", {x:ROT_X0 + k * 7, y:ty, fill:color, "font-size":k * 12}, g).textContent = text;
+  };
   el("line", {x1:ROT_X0, y1:y, x2:ROT_X1, y2:y, stroke:"#E0A100", "stroke-width":k * 2}, g);
-  const label = "Rotary line: top of the object. Designs above it wrap round the surface.";
-  el("rect", {x:ROT_X0, y:y + k * 3, width:k * 7 * label.length * 0.86, height:k * 20, rx:k * 3, fill:"rgba(20,24,28,.82)"}, g);
-  const t = el("text", {x:ROT_X0 + k * 7, y:y + k * 17, fill:"#F2C84B", "font-size":k * 12}, g);
-  t.textContent = label;
+  if (r.align === "edge"){ tag(y + k * 17, "Rotary line: top of the object. Designs above it wrap round the surface.", "#F2C84B"); return; }
+  tag(y + k * 17, "Laser line: top of the object (the head parks here)", "#F2C84B");
+  const m = rotaryRef();
+  if (m != null && designExtent()){
+    el("line", {x1:ROT_X0, y1:m, x2:ROT_X1, y2:m, stroke:"#5CC8F0", "stroke-width":k * 1.6, "stroke-dasharray":`${k * 10} ${k * 5}`}, g);
+    if (Math.abs(m - y) > k * 26) tag(m - k * 8, "Centre of the design: lands on the top of the object", "#7FD6F5");
+  }
 }
 
 function objTransform(o){ return `translate(${o.x + o.w / 2} ${o.y + o.h / 2}) rotate(${o.rot || 0}) translate(${-o.w / 2} ${-o.h / 2})`; }
@@ -688,7 +721,7 @@ function payload(){
   const focal = parseFloat(F("focal").value);
   const out = {focal:isFinite(focal) ? focal : null, fan_gear:D.fan_gear, purifier_gear:D.purifier_gear, objects:objs};
   const r = rotary();
-  if (r) out.rotary = {type:r.type, diameter:r.diameter > 0 ? r.diameter : null, axis_y:r.axis_y};
+  if (r) out.rotary = {type:r.type, diameter:r.diameter > 0 ? r.diameter : null, axis_y:r.axis_y, align:r.align || "center"};
   return out;
 }
 let estTimer = null;
@@ -715,7 +748,7 @@ $("#send").onclick = async () => {
   if (!isFinite(focal)) warn += "<p><b>No focus height is set.</b> Use Measure first, or the laser will engrave at the bed's current height.</p>";
   if (status.connected && status.lidClosed === false) warn += "<p>The lid is open. Close it before pressing Start.</p>";
   const rr = rotary();
-  if (rr) warn += `<p><b>Rotary job (${rr.type === "chuck" ? "chuck" : "rollers"}).</b> The head moves over Y ${rr.axis_y} mm and the object turns from where it sits now, so turn the spot you want engraved to the top first. Check the rotary is plugged into the 4-pin port and the object can turn freely.</p>`;
+  if (rr) warn += `<p><b>Rotary job (${rr.type === "chuck" ? "chuck" : "rollers"}).</b> The head moves over Y ${rr.axis_y} mm and the object turns from where it sits now, so turn ${rr.align === "edge" ? "the spot where the design should start" : "the spot for the centre of the design"} to the top first. Check the rotary is plugged into the 4-pin port and the object can turn freely.</p>`;
   let allow = false;
   if (r.has_raster && !r.raster_verified){
     warn += `<p><b>Fill and picture engraving ${rr ? "on the rotary are" : "are"} experimental.</b> Their move format hasn't been checked against xTool Studio's output yet. Run them only on scrap, stay at the machine, and be ready to press Stop.</p>
@@ -738,22 +771,33 @@ function rotaryUI(){
   if (!D.rotary) D.rotary = {...ROT_DEFAULT};
   const r = D.rotary;
   F("rotOn").checked = !!r.on; F("rotFields").classList.toggle("hidden", !r.on);
-  F("rotType").value = r.type; F("rotDia").value = r.diameter ?? ""; F("rotY").value = r.axis_y;
+  if (!r.align) r.align = "center";
+  F("rotType").value = r.type; F("rotDia").value = r.diameter ?? ""; F("rotY").value = r.axis_y; F("rotAlign").value = r.align;
+  F("rotSnap").classList.toggle("hidden", r.align !== "center");
   const c = circumference();
   F("rotNote").textContent = !r.on ? "" :
     (r.type === "chuck" && !c ? "The chuck needs the object's diameter to turn the right amount. " : "") +
-    (c ? `One turn of the object covers ${c.toFixed(1)} mm above the line. ` : "Enter the diameter to see one full turn on the bed. ") +
-    "Measure focus on the top of the object, on the rotary line.";
+    (r.align === "center"
+      ? "The middle of the design is engraved on the top of the object, half wrapping each way. Turn the object so the spot for the centre of the design faces up. "
+      : "Designs above the line wrap round the object, starting at its top. ") +
+    (c ? `One turn is ${c.toFixed(1)} mm. ` : "Enter the diameter to see one full turn on the bed. ") +
+    "Measure focus on the top of the object, on the laser line.";
 }
 function rotaryChanged(){
   snapshot();
   const r = D.rotary, d = parseFloat(F("rotDia").value), y = parseFloat(F("rotY").value);
-  r.on = F("rotOn").checked; r.type = F("rotType").value;
+  r.on = F("rotOn").checked; r.type = F("rotType").value; r.align = F("rotAlign").value;
   r.diameter = isFinite(d) && d > 0 ? d : null;
   if (isFinite(y)) r.axis_y = Math.min(BED_H, Math.max(0, y));
   rotaryUI(); fitView(); estimate(); autosave();
 }
-for (const id of ["rotOn", "rotType", "rotDia", "rotY"]) F(id).addEventListener("change", rotaryChanged);
+for (const id of ["rotOn", "rotType", "rotDia", "rotY", "rotAlign"]) F(id).addEventListener("change", rotaryChanged);
+F("rotSnap").onclick = () => {
+  const e = designExtent(); if (!e) return toast("Nothing to move yet.");
+  snapshot(); const dy = r3(D.rotary.axis_y - (e[0] + e[1]) / 2);
+  for (const o of D.objects) o.y = r3(o.y + dy);
+  render(); inspector(); estimate(); autosave();
+};
 F("rotPick").onclick = () => setTool("rotline");
 
 // ---------------------------------------------------------------- focus height

@@ -55,6 +55,13 @@ class Rotary:
             raise ValueError("only the RA2 rotary is supported")
         self.diameter = float(cfg["diameter"]) if cfg.get("diameter") else None
         self.axis_y = float(cfg.get("axis_y", 125))
+        # "center": the middle of the design goes to the top of the object (U = 0), half of it
+        #           wraps each way, so the object's centre line can be lined up with the laser.
+        # "edge":   Studio's way: the design is measured from the rotary line on the bed.
+        self.align = cfg.get("align", "center")
+        if self.align not in ("center", "edge"):
+            raise ValueError(f"unknown rotary alignment {self.align}")
+        self.ref_y = self.axis_y        # bed y that lands on top of the object; set per job
         if self.type == "chuck" and not self.diameter:
             raise ValueError("chuck mode needs the object's diameter")
 
@@ -72,11 +79,30 @@ class Rotary:
         return ROLLER_MULTIPLE if self.type == "roller" else 128 / self.circumference
 
     def u(self, y: float) -> float:
-        return self.sign * (y - self.axis_y)
+        return self.sign * (y - self.ref_y)
+
+
+def design_y_extent(job: Job):
+    """Top and bottom (bed y) of everything that gets engraved, raster lines included."""
+    ys = []
+    for e in job.elements:
+        ys += [y for path in e.paths for _, y in path]
+        half = 5.0 / max(1.0, e.density)                 # half a line pitch
+        for y, runs in e.rows:
+            if runs:
+                ys += [y - half, y + half]
+    return (min(ys), max(ys)) if ys else None
 
 
 def rotary_of(job: Job):
-    return Rotary(job.rotary) if getattr(job, "rotary", None) else None
+    if not getattr(job, "rotary", None):
+        return None
+    r = Rotary(job.rotary)
+    if r.align == "center":
+        ext = design_y_extent(job)
+        if ext:
+            r.ref_y = (ext[0] + ext[1]) / 2
+    return r
 
 
 def accessories(job: Job) -> str:
@@ -275,7 +301,7 @@ def generate(job: Job) -> str:
     # Studio's planner starts from its canvas origin. On the flat bed that's machine (0, 0);
     # on the rotary canvas it is X = 50 and, in this app's view, y = 250 (found from the
     # first start point Studio picked in a real rotary job).
-    pos = (float(CYL_X_MIN), 250.0) if rot else (0.0, 0.0)
+    pos = (float(CYL_X_MIN), 250.0 + rot.ref_y - rot.axis_y) if rot else (0.0, 0.0)
     z_set = False
 
     def set_z(p):
@@ -346,7 +372,7 @@ def _check_rotary(job: Job, rot: Rotary) -> None:
             if not CYL_X_MIN - 1e-6 <= x <= CYL_X_MAX + 1e-6:
                 raise ValueError(f"{e.shape} {e.id} is outside the rotary's working length "
                                  f"(X {CYL_X_MIN}-{CYL_X_MAX} mm) at X {x:.1f}")
-            if y > rot.axis_y + 1e-6:
+            if rot.align == "edge" and y > rot.axis_y + 1e-6:
                 raise ValueError(f"{e.shape} {e.id} reaches below the rotary line (Y {rot.axis_y:g} mm); "
                                  "move it onto the line or above it")
             ys.append(y)

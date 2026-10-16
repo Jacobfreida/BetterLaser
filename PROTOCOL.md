@@ -155,3 +155,6 @@ Checked against a roller job Studio sent to the laser (fetched back with `p2s us
   from X 50 to 550.
 - The planner's first outline starts at the vertex nearest Studio's canvas origin
   (X 50, y 250 in the bed view), then nearest-neighbour as on the flat bed.
+- This app's default "centre" alignment is not a Studio feature: it only changes the U origin
+  (U = s·(y − design centre)), so the design's middle is at U = 0 when the job starts; the
+  machine sees ordinary negative and positive U moves, as in Studio's own jobs.

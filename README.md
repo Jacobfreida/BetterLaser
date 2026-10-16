@@ -25,9 +25,11 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Measure:** click a spot and the head's IR sensor measures the material; focus Z is set
   automatically (Z = 25 − distance).
 - **Rotary (RA2, 4-pin port):** tick *Rotary attachment* in the Job panel, choose rollers or
-  chuck, enter the object's diameter and click *Set on bed* on the object's top line. Anything
-  drawn above that line wraps round the object (one full turn is shown on the bed). Rotary
-  projects from Studio (.xcs) import with their settings.
+  chuck, enter the object's diameter and click *Set on bed* on the object's top line (the laser
+  line). By default the **centre** of the design is engraved on the top of the object and half of
+  it wraps each way, so you line up the object's centre line with the laser instead of guessing
+  from the top edge as Studio does. *Line up by: Edge* keeps Studio's behaviour. One full turn is
+  shown on the bed. Rotary projects from Studio (.xcs) import with their settings.
 - **Load job on laser** uploads it in the same binary format Studio uses. Then press **Start**
   on the machine. Pause and Stop are in the top bar.
 
