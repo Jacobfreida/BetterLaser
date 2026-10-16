@@ -56,4 +56,38 @@ lines = g.splitlines()
 assert lines.index("M2519S4T0") < lines.index("M2519S3T0")
 assert [l for l in lines if l.startswith("G0Z")] == ["G0Z12"]
 assert lines[-15:].count("# END") == 1
-print("design checks passed: fill, nonzero holes/overlaps, rotation, text box, image power, job order")
+
+# 7. text wrapped round a circle sits outside it, centred over the top; inside text along the bottom
+circ = {"id": "c", "type": "ellipse", "x": 100, "y": 100, "w": 100, "h": 100, "op": {"mode": "off"}}
+top = design.wrap_text_paths({"content": "HELLO", "font": font, "size": 10, "wrap": {"target": "c", "side": "outside", "gap": 2}}, circ)
+pts = [p for q in top for p in q]
+r = [math.dist(p, (150, 150)) for p in pts]
+assert min(r) >= 50 + 2 - 0.3 and max(r) <= 50 + 2 + 10.5, (min(r), max(r))
+assert abs((min(p[0] for p in pts) + max(p[0] for p in pts)) / 2 - 150) < 1.5 and max(p[1] for p in pts) < 110
+bot = design.wrap_text_paths({"content": "HELLO", "font": font, "size": 10, "wrap": {"target": "c", "side": "inside", "gap": 2}}, circ)
+pts = [p for q in bot for p in q]
+assert max(math.dist(p, (150, 150)) for p in pts) <= 50 - 2 + 0.3 and min(p[1] for p in pts) > 180
+d = {"focal": 10, "objects": [circ, {"id": "t", "type": "text", "x": 0, "y": 0, "w": 1, "h": 1,
+     "text": {"content": "HELLO", "font": font, "size": 10, "wrap": {"target": "c"}}, "op": {"mode": "score", "power": 10, "speed": 100}}]}
+assert len(design.build_job(d).elements[0].paths) == len(top)
+
+# 8. a line is an open path: scored end to end, never closed
+line = {"id": "l", "type": "path", "shape": {"kind": "line"}, "x": 10, "y": 10, "w": 50, "h": 0.01, "nat_w": 50, "nat_h": 0.01,
+        "paths": [[[0, 0], [50, 0.01]]], "op": {"mode": "score", "power": 10, "speed": 100}}
+g = gcode.generate(design.build_job({"focal": 10, "objects": [line]})).splitlines()
+assert [l for l in g if l.startswith(("G0X", "G1X"))] == ["G0X10Y10", "G0X10Y10", "G1X60Y10.01S100F6000"], g
+# 9. job order: pictures, fills, scores, then cuts; inner (smaller) cuts before the outline
+px1 = base64.b64encode(bytes([0, 0])).decode()
+mixed = {"focal": 10, "objects": [
+    {"id": "outline", "type": "rect", "x": 10, "y": 10, "w": 100, "h": 80, "op": {"mode": "cut", "power": 80, "speed": 15}},
+    {"id": "label", "type": "rect", "x": 20, "y": 20, "w": 30, "h": 10, "op": {"mode": "score", "power": 10, "speed": 100}},
+    {"id": "hole", "type": "ellipse", "x": 70, "y": 40, "w": 10, "h": 10, "op": {"mode": "cut", "power": 80, "speed": 15}},
+    {"id": "logo", "type": "image", "x": 20, "y": 50, "w": 2, "h": 1, "image": {"cols": 2, "rows": 1, "data": px1},
+     "op": {"mode": "image", "power": 30, "speed": 200, "density": 100}},
+    {"id": "band", "type": "rect", "x": 20, "y": 35, "w": 30, "h": 5, "op": {"mode": "fill", "power": 20, "speed": 200}}]}
+assert [e.id for e in design.build_job(mixed).elements] == ["logo", "band", "label", "hole", "outline"]
+g = gcode.generate(design.build_job(mixed)).splitlines()
+kinds = [l for l in g if l.startswith("M2519")]
+assert kinds == ["M2519S2T0", "M2519S4T0", "M2519S1T0", "M2519S3T0", "M2519S3T0"], kinds
+print("design checks passed: fill, nonzero holes/overlaps, rotation, text box, image power, job order, "
+      "text wrapped round shapes, lines")

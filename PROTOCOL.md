@@ -122,11 +122,18 @@ The per-machine process settings that are actually used are in `device.data.valu
 1. `POST /v1/laser-head/control {action:"go_to", waitTime:30000, f:9600, x, y}` with
    x = target − IR offset X. The offset comes from config `laserMeasureOffset` ("X64.5Y1.4Z136.7"
    on this machine; plugin default 68).
+   **On the real machine this left the laser over the target and the sensor ~60 mm to the right**,
+   so the app moves the head a further 50 mm left (x = target − offset − 50; 60 mm overshot slightly),
+   adjustable with the `ir_shift_x` setting. (Studio also adds half its 45 × 30 marker icon, `+22.5, +15`; how its click
+   point relates to the icon isn't known.)
 2. Fill light off `PUT /v1/peripheral/param {type:fill_light} {action:"set_bri", idx:0, value:0}`;
    IR LED on `{type:ir_led} {action:"on", index:1}`.
 3. `PUT /v1/peripheral/param {type:ir_measure_distance} {action:"get_distance", type:"single"}`
    returns `{coord_x, coord_y, distance}`.
 4. IR off, lights idx 2 and 3 to 255, head home `go_to x0 y0`.
+The `ir_led` index 1 is the head's visible red measuring laser. The head camera is stream `"1"` of
+`/v1/camera/image` (Studio `captureLocalImage`; stream `"0"` is the lid camera), so the app can photograph
+the red dot before measuring to show where the reading is taken.
 In honeycomb mode, focus Z = 25 − distance. Valid range −50…25.
 
 ## Camera
@@ -135,3 +142,35 @@ In honeycomb mode, focus Z = 25 − distance. Valid range −50…25.
 source pixels for bed points at 10 mm spacing (output 2440×1220 = 4 px/mm), calibrated at thick0 = 3 mm.
 Height correction (fitted from a test burn, residual 0.1 mm): bed point P is sampled at
 C + (P − C)·k, with C ≈ (229, −155) mm and k = 348 / (348 + distance − 3).
+
+## Rotary attachment (RA2, LASER_CYLINDER mode)
+Checked against a roller job Studio sent to the laser (fetched back with `p2s usb fetch`).
+- Header comments: `gc={"size":{"w":<377+axisY>,"h":500}}`, `gc={"offset":{"x":0,"y":50}}`,
+  `gc={"start":{"x":0,"y":<axisY>.0000}}`, `gc={"keys":["u","x"],"rm":-1}` (roller; chuck rm 1),
+  `timeConfig` vectorAccel 100. `WorkingInfo` mode `LASER_CYLINDER`.
+- Head ends with `M535U<factor>` and `G0Y<axisY>` (the head parks over the object's top line).
+  Factor (plugin `aze`): roller = `rollerMultiple` 0.59917; chuck = 128 / circumference.
+  RA3: ×4 and a different code path (not supported here).
+- Elements use tool `T1`: `M2519S1T1`. Bitmap head gets `G0 Y<axisY>` (plugin `bitmapHead` startY).
+- Moves: travel is `G0X<x>` then `G0U<u>` on separate lines; first travel then `G0Z<z>` and both again.
+  Burns are `G1U<u>X<x>` (U first), `S`/`F` on the first move of each outline. Tail has `G0 U0`.
+- Mapping (plugin `Pct`, non-RA3 branch): Studio's cylinder canvas is the bed turned 90°;
+  canvas x → `U = rm·(x − centralAxisPosition)`, canvas y → `X = y + 50`. `centralAxisPosition` is the
+  axis line the user drags on the canvas (default 125); the head parks at `Y = 250 − centralAxisPosition`.
+  In a bed-aligned view (x = machine X, y = machine Y) this is simply `X = x`, `U = s·(y − axisY)`,
+  s = +1 rollers, −1 chuck. Studio's work area is on the back side of the line (y ≤ axisY),
+  from X 50 to 550.
+- The planner's first outline starts at the vertex nearest Studio's canvas origin
+  (X 50, y 250 in the bed view), then nearest-neighbour as on the flat bed.
+- This app's default "centre" alignment is not a Studio feature: it only changes the U origin
+  (U = s·(y − design centre)), so the design's middle is at U = 0 when the job starts; the
+  machine sees ordinary negative and positive U moves, as in Studio's own jobs.
+
+## Moving the head and the red pointer
+- Move: `POST /v1/laser-head/control {action:"go_to", waitTime:30000, f:9600, x, y}`; position:
+  `{action:"get_coord", waitTime:0}`. Studio's optics test also jogs with `POST /v1/cnc/cmd`
+  `params:{cmd:"G91 X<dx> Y<dy> F9600"}` (raw G-code).
+- Red pointer down the beam path ("coaxial"): `PUT /v1/peripheral/param` `params:{type:"coaxial_Ir"}`
+  `data:{action:"on"|"off"}`. (The measuring dot is a different light: `ir_led` index 1.)
+- Unconfirmed whether `go_to` x/y is exactly where the beam lands; the app has an optional
+  correction (`pointer_dx` / `pointer_dy` settings).

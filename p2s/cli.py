@@ -10,6 +10,7 @@ P2S's start button yourself, with the lid closed, standing at the machine.
   python -m p2s.cli 192.168.1.50 watch          # print live events (open the lid, press buttons)
   python -m p2s.cli 192.168.1.50 snapshot out.jpg [--stream 1]
   python -m p2s.cli 192.168.1.50 probe          # try every read-only route, save results to probe.json
+  python -m p2s.cli usb check                   # is this laser compatible? read-only; saves check.json
   python -m p2s.cli convert project.xcs out.gcode  # offline: project file -> P2S G-code
   python -m p2s.cli 192.168.1.50 send project.xcs  # load a job (or a .gcode file); start it on the machine
   python -m p2s.cli usb fetch tmp.bgcode job.bgc  # read-only: download a file from the machine
@@ -75,7 +76,7 @@ def main() -> None:
         return
     ap = argparse.ArgumentParser(prog="p2s")
     ap.add_argument("host", help="'usb' for a USB-C connection, or the P2S's Wi-Fi IP address")
-    ap.add_argument("command", choices=["info", "status", "watch", "snapshot", "probe", "send", "pause", "stop", "fetch", "calib"])
+    ap.add_argument("command", choices=["info", "status", "watch", "snapshot", "probe", "check", "send", "pause", "stop", "fetch", "calib"])
     ap.add_argument("out", nargs="?", default="snapshot.jpg")
     ap.add_argument("dest", nargs="?", help="fetch: local file to save to")
     ap.add_argument("--filetype", type=int, default=1, help="fetch: 1 = job files, 5 = logs/images")
@@ -179,6 +180,8 @@ def main() -> None:
         elif a.command in ("pause", "stop"):
             show(p.set_state(a.command))
             print(f"{a.command} sent.")
+        elif a.command == "check":
+            run_check(p, a.out if a.out != "snapshot.jpg" else "check.json")
         elif a.command == "probe":
             results = []
             for url, params, data in PROBE_ROUTES:
@@ -191,6 +194,52 @@ def main() -> None:
             out = a.out if a.out != "snapshot.jpg" else "probe.json"
             json.dump(results, open(out, "w"), indent=2)
             print(f"Saved results to {out}. Send me this file.")
+
+
+def run_check(p, out_path: str) -> None:
+    """Read-only compatibility check: identify the laser and try every feature's read path.
+
+    Nothing moves and the laser never fires. Saves a report (serial number shortened)."""
+    from . import compat
+    report = {"steps": []}
+
+    def step(name, fn):
+        try:
+            v = fn()
+            report["steps"].append({"step": name, "ok": True, "result": v})
+            print(f"  OK    {name}")
+            return v
+        except Exception as e:                              # noqa: BLE001 - report everything
+            report["steps"].append({"step": name, "ok": False, "error": str(e)})
+            print(f"  FAIL  {name}: {e}")
+            return None
+
+    info = p.machine_info() or {}
+    d = compat.describe(info)
+    sn = str(info.get("sn") or "")
+    report["machine"] = {k: info.get(k) for k in ("deviceCode", "machineType", "machineSubType", "laserPower",
+                                                  "laserType", "gcodeFormat", "hardware", "deviceName")}
+    report["machine"]["sn"] = sn[:10] + "…" if sn else ""
+    report["machine"]["firmware"] = (info.get("firmware") or {}).get("version")
+    report["summary"] = d
+    print(f"\nLaser: {d['label']}  (code {d['code']}, sub-type {d['subType'] or '?'}, firmware {d['firmware'] or '?'})")
+    for f in d["findings"]:
+        print({"ok": "  OK    ", "warn": "  NOTE  ", "stop": "  STOP  "}[f["level"]] + f["message"])
+    print("\nFeature checks (read-only):")
+    step("status", lambda: (p.status() or {}).get("curMode"))
+    step("lid sensor", lambda: p.lid())
+    step("key switch", lambda: p.request("/v1/peripheral/param", params={"type": "machine_lock"}))
+    step("height sensor offset (laserMeasureOffset)", lambda: p.request(
+        "/v1/config/get", data={"alias": "config", "type": "user", "kv": ["laserMeasureOffset"]}))
+    step("head position (get_coord)", lambda: p.request(
+        "/v1/laser-head/control", "POST", data={"action": "get_coord", "waitTime": 0}, timeout=10))
+    cal = step("camera calibration (global_calib.json)", lambda: len(str(p.request(
+        "/v1/file/content", params={"type": "global_calib.json"}, timeout=20) or "")))
+    for stream, label in (("0", "lid camera"), ("1", "head camera")):
+        jpg = step(f"{label} photo", lambda s=stream: len(p.camera_snapshot(s)))
+    json.dump(report, open(out_path, "w"), indent=2, default=str)
+    ok = d["supported"] and all(s["ok"] for s in report["steps"])
+    print(f"\n{'Looks compatible.' if ok else 'See the notes above.'} Saved {out_path}; send it over to compare with the verified P2S.")
 
 
 def load_job(path: str) -> str | None:

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -17,7 +19,7 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import bgc, design, fonts, gcode, xcs
+from . import compat, bgc, design, fonts, gcode, xcs
 from .device import P2S, DeviceError
 
 log = logging.getLogger("p2s.app")
@@ -26,6 +28,10 @@ UI_FILE = os.path.join(HERE, "ui", "index.html")
 USB_HOST = "172.25.3.1" if sys.platform != "darwin" else "172.25.4.1"
 IR_OFFSET_X_DEFAULT = 68.0      # plugin Wit[RULE_TWO]: IR sensor sits 68 mm right of the laser
 HEAD_FEED = 9600                # plugin w7
+# Moving the head by laserMeasureOffset alone left the laser (not the sensor) over the spot;
+# on the user's P2S a further ~60 mm overshot a little, ~50 mm lands on target.
+IR_EXTRA_SHIFT = 50.0
+BED_MAX_X, BED_MAX_Y = 600.0, 305.0
 
 
 def settings_path() -> str:
@@ -72,7 +78,8 @@ class Machine:
             dev.on_event(self._event)
             self.dev, self.host = dev, host
             self.info = dev.machine_info() or {}
-            return self.info
+            self.compat = compat.describe(self.info)
+            return {**self.info, "compat": self.compat}
 
     def disconnect(self):
         if self.dev:
@@ -96,7 +103,8 @@ class Machine:
             return {"connected": False, "error": self.last_error}
         d = self.dev
         out = {"connected": True, "host": self.host, "name": self.info.get("deviceName"),
-               "firmware": (self.info.get("firmware") or {}).get("package_version")}
+               "firmware": (self.info.get("firmware") or {}).get("package_version"),
+               "compat": getattr(self, "compat", None)}
         try:
             st = d.status() or {}
             cm = st.get("curMode") or {}
@@ -123,14 +131,132 @@ class Machine:
             pass
         return IR_OFFSET_X_DEFAULT
 
-    def measure(self, x: float, y: float) -> dict:
+    def _sensor_head_x(self, x: float, y: float, shift):
+        """Head X that puts the height sensor over bed point x, and the extra shift used."""
+        off = self.ir_offset_x()
+        extra = IR_EXTRA_SHIFT if shift is None else float(shift)
+        hx = x - off - extra
+        if hx < -off or hx > 600 or y < 0 or y > 308:
+            raise DeviceError(f"Can't measure there: the height sensor sits to the right of the laser, "
+                              f"so it can't reach the first {extra:.0f} mm of the bed. Pick a point at least "
+                              f"{extra:.0f} mm from the left edge.")
+        return hx, extra
+
+    @staticmethod
+    def _restore(d):
+        """Measuring LED off, lights back on, head home (Studio's clean-up after measuring)."""
+        for args in ((("/v1/peripheral/param", "PUT"), {"params": {"type": "ir_led"}, "data": {"action": "off", "index": 1}}),
+                     (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 2, "value": 255}}),
+                     (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 3, "value": 255}}),
+                     (("/v1/laser-head/control", "POST"), {"data": {"action": "go_to", "waitTime": 0, "f": HEAD_FEED, "x": 0, "y": 0}})):
+            try:
+                d.request(*args[0], **args[1])
+            except Exception:
+                pass
+
+    def measure_preview(self, x: float, y: float, shift: float | None = None) -> dict:
+        """Move the sensor over (x, y), switch on the head's red measuring laser and photograph
+        it with the head camera (stream "1", Studio's captureLocalImage), so the user can see
+        exactly where the measurement will be taken. The head stays there with the laser on
+        until measure() or measure_cancel()."""
         with self.lock:
             d = self.need()
-            off = self.ir_offset_x()
-            hx = x - off                 # put the IR sensor (not the laser) over the clicked point
-            if hx < 0 or hx > 620 or y < 0 or y > 308:
-                raise DeviceError(f"Can't measure there: the sensor is {off:.0f} mm right of the laser head, "
-                                  f"so pick a point at least {off:.0f} mm from the left edge.")
+            hx, extra = self._sensor_head_x(x, y, shift)
+            try:
+                d.request("/v1/laser-head/control", "POST", timeout=35,
+                          data={"action": "go_to", "waitTime": 30000, "f": HEAD_FEED, "x": hx, "y": y})
+                d.request("/v1/peripheral/param", "PUT", params={"type": "ir_led"}, data={"action": "on", "index": 1})
+                time.sleep(0.4)
+                jpg = d.camera_snapshot("1")
+            except Exception:
+                self._restore(d)
+                raise
+            return {"jpeg": base64.b64encode(jpg).decode(), "head_x": hx, "head_y": y, "shift": extra}
+
+    # -- moving the head and the red pointer ------------------------------------
+    # Studio: setLaserHead / getLaserPosition (/v1/laser-head/control go_to / get_coord) and
+    # turnOnCoaxialIr / turnOffCoaxialIr (PUT /v1/peripheral/param type coaxial_Ir): a red
+    # dot that shines down the beam path, so it marks exactly where the laser would fire.
+    head_pos = (0.0, 0.0)
+
+    def _need_idle(self, d):
+        mode = ((d.status() or {}).get("curMode") or {}).get("mode")
+        if mode not in (None, "P_IDLE", "P_SLEEP", "P_WORK_DONE"):
+            raise DeviceError(f"The laser is busy ({mode}); the head can only be moved when it's idle.")
+
+    @staticmethod
+    def _pointer_fix():
+        """Optional correction (settings pointer_dx / pointer_dy, mm) if the red dot lands away
+        from where it was sent. Not needed if go_to coordinates match the bed (unconfirmed)."""
+        st = load_settings()
+        return float(st.get("pointer_dx") or 0), float(st.get("pointer_dy") or 0)
+
+    def _go(self, d, x, y, wait=True):
+        x = min(BED_MAX_X, max(0.0, float(x))); y = min(BED_MAX_Y, max(0.0, float(y)))
+        fx, fy = self._pointer_fix()
+        d.request("/v1/laser-head/control", "POST", timeout=35,
+                  data={"action": "go_to", "waitTime": 30000 if wait else 0, "f": HEAD_FEED, "x": x - fx, "y": y - fy})
+        self.head_pos = (x, y)
+        return x, y
+
+    def pointer(self, on: bool) -> dict:
+        with self.lock:
+            self.need().request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"},
+                                data={"action": "on" if on else "off"})
+        return {"ok": True, "pointer": on}
+
+    def where(self) -> dict:
+        with self.lock:
+            d = self.need()
+            try:
+                r = d.request("/v1/laser-head/control", "POST", data={"action": "get_coord", "waitTime": 0}, timeout=10) or {}
+                if r.get("x") is not None:
+                    fx, fy = self._pointer_fix()
+                    self.head_pos = (float(r["x"]) + fx, float(r["y"]) + fy)
+            except Exception:
+                pass
+        return {"x": self.head_pos[0], "y": self.head_pos[1]}
+
+    def move(self, x=None, y=None, dx=0.0, dy=0.0, pointer=None) -> dict:
+        """Move the head to (x, y), or by (dx, dy) from where it is. Kept on the bed."""
+        if x is None or y is None:
+            cur = self.where()
+            x, y = cur["x"] + float(dx), cur["y"] + float(dy)
+        with self.lock:
+            d = self.need()
+            self._need_idle(d)
+            if pointer is not None:
+                d.request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"},
+                          data={"action": "on" if pointer else "off"})
+            x, y = self._go(d, x, y)
+        return {"x": x, "y": y}
+
+    def trace(self, points) -> dict:
+        """Run the red pointer through a list of points (e.g. a job's outline), then stay at the last."""
+        with self.lock:
+            d = self.need()
+            self._need_idle(d)
+            d.request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"}, data={"action": "on"})
+            for px, py in points:
+                self._go(d, px, py)
+        return {"x": self.head_pos[0], "y": self.head_pos[1]}
+
+    def measure_cancel(self) -> dict:
+        with self.lock:
+            self._restore(self.need())
+        return {"ok": True}
+
+    def measure(self, x: float, y: float, shift: float | None = None) -> dict:
+        """Measure the material height at bed point (x, y) with the head's IR sensor.
+
+        The sensor sits right of the laser. Subtracting the machine's laserMeasureOffset
+        once (as we read Studio's code) left the LASER over the clicked point on a real
+        P2S, with the sensor about 60 mm to the right, so by default the head is moved a
+        further IR_EXTRA_SHIFT mm. `shift` (settings: ir_shift_x) overrides that amount, in mm.
+        """
+        with self.lock:
+            d = self.need()
+            hx, extra = self._sensor_head_x(x, y, shift)
             try:
                 d.request("/v1/laser-head/control", "POST", timeout=35,
                           data={"action": "go_to", "waitTime": 30000, "f": HEAD_FEED, "x": hx, "y": y})
@@ -141,31 +267,61 @@ class Machine:
                 r = d.request("/v1/peripheral/param", "PUT", params={"type": "ir_measure_distance"},
                               data={"action": "get_distance", "type": "single"}, timeout=20) or {}
             finally:
-                for args in ((("/v1/peripheral/param", "PUT"), {"params": {"type": "ir_led"}, "data": {"action": "off", "index": 1}}),
-                             (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 2, "value": 255}}),
-                             (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 3, "value": 255}}),
-                             (("/v1/laser-head/control", "POST"), {"data": {"action": "go_to", "waitTime": 0, "f": HEAD_FEED, "x": 0, "y": 0}})):
-                    try:
-                        d.request(*args[0], **args[1])
-                    except Exception:
-                        pass
+                self._restore(d)
             dist = r.get("distance")
             if dist is None:
                 raise DeviceError(f"The machine didn't return a distance: {r}")
             dist = float(dist)
             focal = 25 - dist            # honeycomb mode: k7(...).value = 25 - z
             ok = -50 <= focal <= 25
-            return {"distance": dist, "focal": round(focal, 2), "ok": ok,
-                    "message": "" if ok else "Out of range: is there material under the sensor?"}
+            return {"distance": dist, "focal": round(focal, 2), "ok": ok, "head_x": hx, "head_y": y,
+                    "shift": extra, "sensor": {"x": r.get("coord_x"), "y": r.get("coord_y")},
+                    "message": "" if ok else "Nothing measured: is the material under the height sensor?"}
 
 
 MACHINE = Machine()
+
+
+def job_start_and_outline(design_json: dict):
+    """Where the laser first fires in a job, and the corners of the area it covers (bed mm).
+
+    The start is the first travel move of the G-code we would send. On the rotary the head
+    stays on the rotary line (Y) and the object turns, so the outline is just the X span.
+    """
+    job = design.build_job(design_json)
+    gcode.check_bounds(job)
+    text = gcode.generate(job)
+    rot = gcode.rotary_of(job)
+    start = None
+    for line in text.splitlines():
+        m = re.match(r"G0X(-?[\d.]+)(?:Y(-?[\d.]+))?$", line)
+        if m:
+            start = (float(m[1]), float(m[2]) if m[2] is not None and not rot else (rot.axis_y if rot else 0.0))
+            break
+    pts = [p for e in job.elements for path in e.paths for p in path]
+    pts += [(x, yy) for e in job.elements for yy, runs in e.rows for a, b, _ in runs for x in (a, b)]
+    if not pts or start is None:
+        raise ValueError("Nothing to frame")
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    if rot:
+        y = rot.axis_y
+        corners = [(min(xs), y), (max(xs), y), (min(xs), y)]
+    else:
+        corners = [(min(xs), min(ys)), (max(xs), min(ys)), (max(xs), max(ys)), (min(xs), max(ys)), (min(xs), min(ys))]
+    return {"start": start, "outline": corners, "rotary": bool(rot)}
 
 
 def job_text(design_json: dict) -> tuple[str, xcs.Job]:
     job = design.build_job(design_json)
     gcode.check_bounds(job)
     return gcode.generate(job), job
+
+
+def raster_verified(job) -> bool:
+    """Fill/photo moves are checked against Studio on the flat bed; on the rotary not yet."""
+    if job.rotary:
+        return gcode.RASTER_VERIFIED and gcode.ROTARY_RASTER_VERIFIED
+    return gcode.RASTER_VERIFIED
 
 
 def estimate_seconds(job) -> float:
@@ -192,6 +348,9 @@ def xcs_to_design(doc: dict) -> dict:
         dev = dict(doc["device"]["data"]["value"])[canvas_id]
         dev_displays = dict(dev["displays"]["value"])
         cfg = dev["data"].get(dev["mode"], {})
+        rotary = dev["mode"] == "LASER_CYLINDER"
+        if rotary and (cfg.get("rotaryAttachmentModel") or "ra2") != "ra2":
+            raise ValueError("Only RA2 rotary projects can be imported.")
         objs, skipped = [], []
         for d in canvas["displays"]:
             entry = dev_displays.get(d["id"]) or d
@@ -201,13 +360,27 @@ def xcs_to_design(doc: dict) -> dict:
                 skipped.append(d["type"]); continue
             p = xcs._params(entry, ptype)
             mode = {"VECTOR_ENGRAVING": "score", "VECTOR_CUTTING": "cut", "FILL_VECTOR_ENGRAVING": "fill"}.get(ptype, "score")
-            objs.append({"id": d["id"], "type": t, "x": d["x"], "y": d["y"], "w": abs(d["width"]),
-                         "h": abs(d["height"]), "rot": d.get("angle", 0) or 0,
+            w, h, ang = abs(d["width"]), abs(d["height"]), d.get("angle", 0) or 0
+            # Studio's x/y is the shape's own corner after rotating about it; find the centre
+            a = math.radians(ang)
+            cx = d["x"] + w / 2 * math.cos(a) - h / 2 * math.sin(a)
+            cy = d["y"] + w / 2 * math.sin(a) + h / 2 * math.cos(a)
+            if rotary:
+                # Studio's rotary canvas is this app's bed view turned 90 degrees:
+                # X = canvas y + 50, and y = 250 - canvas x (U is measured from the axis line)
+                cx, cy, ang = cy + 50, 250 - cx, ang - 90
+            objs.append({"id": d["id"], "type": t, "x": cx - w / 2, "y": cy - h / 2, "w": w,
+                         "h": h, "rot": ang,
                          "op": {"mode": mode, "power": p.get("power", 10), "speed": p.get("speed", 100),
                                 "passes": p.get("repeat", 1), "air": p.get("airPump", 25),
                                 "density": p.get("density", 100)}})
-        return {"focal": cfg.get("focalLength"), "fan_gear": cfg.get("fanGear", 3),
-                "purifier_gear": cfg.get("purifierGear", 4), "objects": objs, "skipped": skipped}
+        out = {"focal": cfg.get("focalLength"), "fan_gear": cfg.get("fanGear", 3),
+               "purifier_gear": cfg.get("purifierGear", 4), "objects": objs, "skipped": skipped}
+        if rotary:
+            dia = cfg.get("diameter") or ((cfg.get("perimeter") or 0) / math.pi) or None
+            out["rotary"] = {"type": "chuck" if cfg.get("rotaryAttachmentType") == "catch" else "roller",
+                             "diameter": dia, "axis_y": 125}
+        return out
     finally:
         os.unlink(f.name)
 
@@ -261,6 +434,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "info": info})
             if p == "/api/disconnect":
                 MACHINE.disconnect(); return self._json({"ok": True})
+            if p == "/api/text" and (b.get("wrap") or {}).get("target"):
+                # text wrapped round a shape: bed-mm outlines, returned in a box of their own
+                paths = design.wrap_text_paths(b, b["target_obj"])
+                xs = [x for q in paths for x, _ in q] or [0]; ys = [y for q in paths for _, y in q] or [0]
+                x0, y0 = min(xs), min(ys)
+                return self._json({"paths": [[[round(x - x0, 3), round(y - y0, 3)] for x, y in q] for q in paths],
+                                   "x": x0, "y": y0, "nat_w": max(max(xs) - x0, 1e-6), "nat_h": max(max(ys) - y0, 1e-6)})
             if p == "/api/text":
                 paths, w, h = design.text_geometry(b)
                 return self._json({"paths": [[[round(x, 3), round(y, 3)] for x, y in q] for q in paths],
@@ -272,12 +452,20 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/gcode":
                 text, job = job_text(b)
                 return self._json({"gcode": text, "seconds": estimate_seconds(job),
-                                   "raster_verified": gcode.RASTER_VERIFIED,
+                                   "raster_verified": raster_verified(job),
                                    "has_raster": any(e.is_raster for e in job.elements)})
             if p == "/api/send":
                 text, job = job_text(b["design"])
-                if any(e.is_raster for e in job.elements) and not gcode.RASTER_VERIFIED and not b.get("allow_unverified"):
-                    return self._json({"error": "Fill/photo engraving isn't verified against Studio yet."}, 400)
+                c = getattr(MACHINE, "compat", None)
+                if c and not c["supported"]:
+                    return self._json({"error": "Not sending: " + next((f["message"] for f in c["findings"]
+                                                                        if f["level"] == "stop"), "this laser isn't supported")}, 400)
+                if any(e.is_raster for e in job.elements) and not raster_verified(job) and not b.get("allow_unverified"):
+                    return self._json({"error": "Fill/photo engraving on the rotary isn't verified against Studio yet."}, 400)
+                try:
+                    MACHINE.pointer(False)           # red alignment pointer off before the job
+                except Exception:
+                    pass
                 with MACHINE.lock:
                     d = MACHINE.need()
                     st = (d.status() or {}).get("curMode", {})
@@ -296,8 +484,34 @@ class Handler(BaseHTTPRequestHandler):
                 with MACHINE.lock:
                     data = MACHINE.need().request("/v1/file/content", params={"type": b.get("name", "global_calib.json")}, timeout=20)
                 return self._json({"data": data})
+            if p == "/api/head":
+                act = b.get("action")
+                if act == "where":
+                    return self._json(MACHINE.where())
+                if act == "pointer":
+                    return self._json(MACHINE.pointer(bool(b.get("on"))))
+                if act == "home":
+                    MACHINE.pointer(False)
+                    return self._json(MACHINE.move(0, 0))
+                if act == "move":
+                    return self._json(MACHINE.move(b.get("x"), b.get("y"), b.get("dx", 0), b.get("dy", 0), b.get("pointer")))
+                if act in ("start", "frame"):
+                    info = job_start_and_outline(b["design"])
+                    if act == "start":
+                        return self._json({**MACHINE.move(*info["start"], pointer=True), **info})
+                    pos = MACHINE.trace(info["outline"] + [info["start"]])
+                    return self._json({**pos, **info})
+                return self._json({"error": f"unknown head action {act}"}, 400)
+            if p in ("/api/measure_preview", "/api/measure_cancel"):
+                if p.endswith("cancel"):
+                    return self._json(MACHINE.measure_cancel())
+                shift = b.get("shift", load_settings().get("ir_shift_x"))
+                return self._json(MACHINE.measure_preview(float(b["x"]), float(b["y"]),
+                                                          None if shift in (None, "") else float(shift)))
             if p == "/api/measure":
-                return self._json(MACHINE.measure(float(b["x"]), float(b["y"])))
+                shift = b.get("shift", load_settings().get("ir_shift_x"))
+                return self._json(MACHINE.measure(float(b["x"]), float(b["y"]),
+                                                  None if shift in (None, "") else float(shift)))
             self._send(404, b"not found", "text/plain")
         except Exception as e:
             self._error(e)

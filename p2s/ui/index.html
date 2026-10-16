@@ -85,6 +85,11 @@ input[type=range]{width:100%}
 #job{margin-top:auto;background:#EEF1F3}
 #send{width:100%;padding:11px;font-size:15px;font-weight:600;background:var(--go);border-color:var(--go);color:#fff;border-radius:var(--radius);border:1px solid}
 #send:disabled{opacity:.5}
+#headPanel{position:absolute;left:10px;top:10px;width:300px;max-height:calc(100% - 20px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:0 6px 22px rgba(0,0,0,.28);z-index:3}
+.jogwrap{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;margin-top:10px;align-items:start}
+.jog{display:grid;grid-template-columns:repeat(3,38px);grid-template-rows:repeat(3,34px);gap:4px}
+.jog .btn{padding:0;font-size:16px}
+#rotBox{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--line)}
 .focusrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 #imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);background:#fff;max-height:150px;object-fit:contain}
 
@@ -120,11 +125,14 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   <button class="tool" data-tool="select" aria-pressed="true" title="Select and move (V)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3l13 8-6 1.5L9 19z"/></svg></button>
   <button class="tool" data-tool="rect" title="Rectangle (R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12"/></svg></button>
   <button class="tool" data-tool="ellipse" title="Ellipse (E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg></button>
+  <button class="tool" data-tool="line" title="Line (L): drag to draw, Shift snaps to 45°"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19L20 5"/><circle cx="4" cy="19" r="1.6" fill="currentColor"/><circle cx="20" cy="5" r="1.6" fill="currentColor"/></svg></button>
+  <button class="tool" data-tool="shape" title="Shape (P): polygon, star, rounded rectangle or heart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z"/></svg></button>
   <button class="tool" data-tool="text" title="Text (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14M12 6v13M9 19h6"/></svg></button>
   <button class="tool" id="imageTool" title="Add a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg></button>
   <button class="tool" id="importTool" title="Import SVG or xTool project (.xcs)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg></button>
   <hr>
   <button class="tool" id="cameraTool" title="Camera view of the bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h4l2-2h4l2 2h4v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+  <button class="tool" id="headTool" title="Laser head: jog, red pointer, show job start"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 5l-2 2M12 5l2 2M12 19l-2-2M12 19l2-2M5 12l2-2M5 12l2 2M19 12l-2-2M19 12l-2 2"/></svg></button>
   <button class="tool" data-tool="measure" title="Measure material height: click a spot on the bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/></svg></button>
 </nav>
 
@@ -136,6 +144,31 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
     <button class="btn small" id="camRefresh">Retake</button>
     <button class="btn small" id="camAlign" title="Fine-tune camera alignment">Align</button>
     <button class="btn small" id="camHide">Hide</button>
+  </div>
+  <div id="headPanel" class="hidden" role="dialog" aria-label="Laser head">
+    <div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:15px">Laser head <span class="muted" id="headPos" style="font-weight:400"></span></h2>
+      <button class="btn small" id="headClose" aria-label="Close" title="Close (the head stays where it is)">✕</button></div>
+      <div class="jogwrap">
+        <div class="jog" role="group" aria-label="Jog the laser head">
+          <span></span><button class="btn" data-jog="0,-1" title="Toward the back">↑</button><span></span>
+          <button class="btn" data-jog="-1,0" title="Left">←</button><button class="btn" id="headHome" title="Send the head home (0, 0)">⌂</button><button class="btn" data-jog="1,0" title="Right">→</button>
+          <span></span><button class="btn" data-jog="0,1" title="Toward the front">↓</button><span></span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+          <label class="f">Step (mm)<select id="jogStep"><option>0.5</option><option>1</option><option selected>5</option><option>10</option><option>50</option></select></label>
+          <label class="chk"><input type="checkbox" id="pointerOn"> Red pointer</label>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <button class="btn" id="headGoto" title="Then click the bed: the head moves there with the red pointer on">Move to a point</button>
+        <button class="btn" id="headStart" title="Park the red pointer where the job will start">Show job start</button>
+        <button class="btn" id="headFrame" style="grid-column:1/3" title="Run the red pointer round the area the job covers, then stop at the start">Trace job outline</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">The red pointer shines down the laser's own path, so it marks exactly where the laser will fire. Line your part up with it.</p>
+      <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Pointer lands off the spot you picked?</summary>
+        <p class="muted">Use <b>Move to a point</b> on a mark you can see, then enter how far the red dot landed from it (right and front are positive). The app corrects every head move by that much.</p>
+        <div class="grid2"><label class="f">Dot is right by (mm)<input id="ptrDx" type="number" step="0.5"></label><label class="f">Dot is toward the front by (mm)<input id="ptrDy" type="number" step="0.5"></label></div>
+      </details>
   </div>
   <div id="hint"></div>
   <div id="zoomctl"><button id="zIn" aria-label="Zoom in">+</button><button id="zOut" aria-label="Zoom out">−</button><button id="zFit" aria-label="Fit bed" title="Fit bed">⤢</button></div>
@@ -154,12 +187,23 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
         <label class="f">Rotation (°)<input id="frot" type="number" step="1"></label>
         <label class="chk" style="align-self:end;padding-bottom:7px"><input type="checkbox" id="flock" checked> Keep proportions</label>
       </div>
+      <div id="shapeFields" class="hidden grid2" style="margin-top:12px">
+        <label class="f">Shape<select id="skind"><option value="polygon">Polygon</option><option value="star">Star</option><option value="rounded">Rounded rectangle</option><option value="heart">Heart</option></select></label>
+        <label class="f" id="ssidesF"><span id="ssidesLbl">Sides</span><input id="ssides" type="number" min="3" max="40" step="1"></label>
+        <label class="f" id="sinnerF">Inner size (%)<input id="sinner" type="number" min="10" max="95" step="1"></label>
+        <label class="f" id="sradiusF">Corner radius (mm)<input id="sradius" type="number" min="0" step="0.5"></label>
+      </div>
       <div id="textFields" class="hidden" style="margin-top:12px">
         <label class="f">Text<textarea id="ttext" rows="2"></textarea></label>
         <div class="grid2" style="margin-top:8px">
           <label class="f" style="grid-column:1/3">Font<select id="tfont"></select></label>
           <label class="f">Size (mm)<input id="tsize" type="number" min="1" step="0.5"></label>
           <label class="f">Align<select id="talign"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+          <label class="f" style="grid-column:1/3">Wrap around<select id="twrap"></select></label>
+          <label class="f wrapF">Side<select id="tside"><option value="outside">Outside, over the top</option><option value="inside">Inside, along the bottom</option></select></label>
+          <label class="f wrapF">Gap from shape (mm)<input id="tgap" type="number" step="0.5"></label>
+          <label class="f wrapF" style="grid-column:1/3">Position round the shape (°)<input id="tshift" type="number" step="1"></label>
+          <p class="muted wrapF" style="grid-column:1/3;margin:0">Drag the text to slide it round the shape. Moving or resizing the shape takes the text with it.</p>
         </div>
       </div>
       <div id="imgFields" class="hidden" style="margin-top:12px">
@@ -198,6 +242,20 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
   <section id="job">
     <h2>Job</h2>
+    <div id="rotBox">
+      <label class="chk"><input type="checkbox" id="rotOn"> Rotary attachment (RA2, in the 4-pin port)</label>
+      <div id="rotFields" class="hidden grid2" style="margin-top:8px">
+        <label class="f">Object held by<select id="rotType"><option value="roller">Rollers</option><option value="chuck">Chuck</option></select></label>
+        <label class="f">Object diameter (mm)<input id="rotDia" type="number" min="5" max="300" step="0.1" placeholder="e.g. 80"></label>
+        <label class="f" style="grid-column:1/3">Line up by<select id="rotAlign">
+          <option value="center">Centre of the design (put the object's centre line on top)</option>
+          <option value="edge">Edge on the rotary line (like xTool Studio)</option></select></label>
+        <label class="f">Laser line Y (mm)<input id="rotY" type="number" min="0" max="305" step="0.5"></label>
+        <button class="btn" id="rotPick" style="align-self:end" title="Click the top line of the object on the bed or camera picture">Set on bed</button>
+        <button class="btn small" id="rotSnap" style="grid-column:1/3" title="Move the design so its centre sits on the laser line, to check it against the camera picture">Move design onto the laser line</button>
+        <p class="muted" id="rotNote" style="grid-column:1/3;margin:0;line-height:1.4"></p>
+      </div>
+    </div>
     <div class="focusrow">
       <label class="f">Focus height Z (mm)<input id="focal" type="number" step="0.1" placeholder="Measure first"></label>
       <button class="btn" id="measureBtn" title="Click a spot on the material to measure its height">Measure</button>
@@ -234,6 +292,14 @@ const DEFAULT_OP = {
 
 // ---------------------------------------------------------------- state
 let D = {focal:null, fan_gear:3, purifier_gear:4, objects:[]};
+// Rotary (RA2). The object lies along the machine's X axis; the head parks over its top
+// line at Y = axis_y. Everything drawn above that line (toward the back of the machine,
+// as in Studio) is wrapped onto the surface: a shape d mm above the line is engraved
+// d mm further round the object.
+const ROT_DEFAULT = {on:false, type:"roller", diameter:null, axis_y:125, align:"center"};
+const ROT_X0 = 50, ROT_X1 = 550;           // the rotary's working length (Studio's limits)
+const rotary = () => (D.rotary && D.rotary.on) ? D.rotary : null;
+const circumference = () => { const r = rotary(); return r && r.diameter > 0 ? Math.PI * r.diameter : null; };
 let sel = null, tool = "select", status = {connected:false}, settings = {};
 let view = {x:-10, y:-10, w:BED_W+20, h:BED_H+20};
 const imgCache = new Map();       // id -> HTMLImageElement (original picture)
@@ -249,7 +315,7 @@ const r3 = v => Math.round(v * 1000) / 1000;
 function snapshot(){ history.push(JSON.stringify(D)); if (history.length > 80) history.shift(); future = []; autosave(); }
 function undo(){ if (!history.length) return; future.push(JSON.stringify(D)); D = JSON.parse(history.pop()); afterLoad(); }
 function redo(){ if (!future.length) return; history.push(JSON.stringify(D)); D = JSON.parse(future.pop()); afterLoad(); }
-function afterLoad(){ if (sel && !obj(sel)) sel = null; for (const o of D.objects) if (o.type === "image") ensureImage(o); render(); inspector(); autosave(); }
+function afterLoad(){ if (sel && !obj(sel)) sel = null; rotaryUI(); for (const o of D.objects) if (o.type === "image") ensureImage(o); render(); inspector(); autosave(); }
 const obj = id => D.objects.find(o => o.id === id);
 
 function autosave(){ try { localStorage.setItem("p2s.design", JSON.stringify(D, (k, v) => k === "_outline" ? undefined : v)); } catch(e) {} }
@@ -285,9 +351,11 @@ function screenToMm(ev){ const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.
 function applyView(){ svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`); }
 function fitView(){
   const r = svg.getBoundingClientRect(), pad = 22, aspect = r.width / Math.max(r.height, 1);
-  let w = BED_W + 2 * pad, h = BED_H + 2 * pad;
+  // on the rotary, one full turn of surface may reach past the back of the bed
+  const band = rotaryBand(), top = Math.min(0, band ? band[0] : 0), H = Math.max(BED_H, band ? band[1] : 0) - top;
+  let w = BED_W + 2 * pad, h = H + 2 * pad;
   if (w / h < aspect) w = h * aspect; else h = w / aspect;
-  view = {x: BED_W / 2 - w / 2, y: BED_H / 2 - h / 2, w, h}; applyView(); render();
+  view = {x: BED_W / 2 - w / 2, y: top + H / 2 - h / 2, w, h}; applyView(); render();
 }
 function zoom(f, cx, cy){
   cx ??= view.x + view.w / 2; cy ??= view.y + view.h / 2;
@@ -296,7 +364,7 @@ function zoom(f, cx, cy){
 }
 const px = () => view.w / Math.max(svg.getBoundingClientRect().width, 1); // mm per screen px
 
-function pathD(paths){ return paths.map(p => "M" + p.map(q => `${r3(q[0])} ${r3(q[1])}`).join("L") + "Z").join(""); }
+function pathD(paths){ return paths.map(p => { const a = p[0], b = p[p.length - 1], closed = p.length > 2 && Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6; return "M" + p.map(q => `${r3(q[0])} ${r3(q[1])}`).join("L") + (closed ? "Z" : ""); }).join(""); }
 
 function render(){
   svg.textContent = ""; setupDefs();
@@ -313,10 +381,68 @@ function render(){
   for (let x = 0; x <= BED_W; x += 100){ const t = el("text", {x, y:-px() * 5, "text-anchor":"middle"}, lab); t.textContent = x; }
   for (let y = 100; y <= BED_H; y += 100){ const t = el("text", {x:-px() * 6, y:y + px() * 4, "text-anchor":"end"}, lab); t.textContent = y; }
 
+  drawRotary();
   for (const o of D.objects) drawObject(o);
   if (sel && obj(sel)) drawSelection(obj(sel));
-  if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
+  if (drag && drag.kind === "draw" && tool === "line") el("line", {x1:drag.x0, y1:drag.y0, x2:drag.x1, y2:drag.y1, stroke:"#fff", "stroke-width":px() * 1.5, "stroke-dasharray":`${px() * 4} ${px() * 3}`}, svg);
+  else if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
+  if (head.known){
+    const k = px(), g = el("g", {"pointer-events":"none"}, svg), c = head.pointer ? "#FF3B30" : "#F2B400";
+    el("circle", {cx:head.x, cy:head.y, r:k * 6, fill:"none", stroke:c, "stroke-width":k * 2}, g);
+    el("path", {d:`M${head.x - k * 12} ${head.y}H${head.x - k * 3}M${head.x + k * 3} ${head.y}H${head.x + k * 12}M${head.x} ${head.y - k * 12}V${head.y - k * 3}M${head.x} ${head.y + k * 3}V${head.y + k * 12}`, stroke:c, "stroke-width":k * 1.6}, g);
+  }
   if (measureMark) el("circle", {cx:measureMark.x, cy:measureMark.y, r:px() * 7, fill:"none", stroke:"#E0A100", "stroke-width":px() * 2.5}, svg);
+}
+
+// Top and bottom (bed y) of everything that will be engraved, rotation included.
+function designExtent(){
+  let y0 = Infinity, y1 = -Infinity;
+  for (const o of D.objects){
+    if (!o.op || o.op.mode === "off") continue;
+    const a = (o.rot || 0) * Math.PI / 180, hh = (Math.abs(o.w * Math.sin(a)) + Math.abs(o.h * Math.cos(a))) / 2, cy = o.y + o.h / 2;
+    y0 = Math.min(y0, cy - hh); y1 = Math.max(y1, cy + hh);
+  }
+  return isFinite(y0) ? [y0, y1] : null;
+}
+// The bed y that ends up on top of the object: the design's centre, or Studio's line.
+function rotaryRef(){
+  const r = rotary(); if (!r) return null;
+  const e = designExtent();
+  return r.align === "edge" || !e ? r.axis_y : (e[0] + e[1]) / 2;
+}
+// One full turn of surface on the bed: above the line (edge) or centred on the design (center).
+function rotaryBand(){
+  const r = rotary(), c = circumference(); if (!r || !c) return null;
+  if (r.align === "edge") return [r.axis_y - c, r.axis_y];
+  const m = rotaryRef(); return [m - c / 2, m + c / 2];
+}
+function drawRotary(){
+  const r = rotary(); if (!r) return;
+  const y = r.axis_y, c = circumference(), k = px(), band = rotaryBand();
+  const g = el("g", {"pointer-events":"none"}, svg);
+  // outside the rotary's working length
+  el("rect", {x:0, y:0, width:ROT_X0, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
+  el("rect", {x:ROT_X1, y:0, width:BED_W - ROT_X1, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
+  // edge mode: below the line is outside the work area (Studio's starts at the line and runs to the back)
+  if (r.align === "edge" && y < BED_H) el("rect", {x:ROT_X0, y, width:ROT_X1 - ROT_X0, height:BED_H - y, fill:"rgba(20,24,28,.42)"}, g);
+  if (band){
+    el("rect", {x:ROT_X0, y:band[0], width:ROT_X1 - ROT_X0, height:c, fill:"rgba(233,220,194,.22)", stroke:"#E9DCC2", "stroke-width":k, "stroke-dasharray":`${k * 6} ${k * 4}`}, g);
+    const lbl = `one full turn: ${c.toFixed(1)} mm`;
+    el("rect", {x:ROT_X1 - k * 7 * lbl.length * 0.82, y:band[0] + k * 2, width:k * 7 * lbl.length * 0.82, height:k * 18, rx:k * 3, fill:"rgba(20,24,28,.75)"}, g);
+    el("text", {x:ROT_X1 - k * 6, y:band[0] + k * 15, "text-anchor":"end", fill:"#E9DCC2", "font-size":k * 11}, g).textContent = lbl;
+  }
+  const tag = (ty, text, color) => {
+    el("rect", {x:ROT_X0, y:ty - k * 14, width:k * 7 * text.length * 0.86, height:k * 20, rx:k * 3, fill:"rgba(20,24,28,.82)"}, g);
+    el("text", {x:ROT_X0 + k * 7, y:ty, fill:color, "font-size":k * 12}, g).textContent = text;
+  };
+  el("line", {x1:ROT_X0, y1:y, x2:ROT_X1, y2:y, stroke:"#E0A100", "stroke-width":k * 2}, g);
+  if (r.align === "edge"){ tag(y + k * 17, "Rotary line: top of the object. Designs above it wrap round the surface.", "#F2C84B"); return; }
+  tag(y + k * 17, "Laser line: top of the object (the head parks here)", "#F2C84B");
+  const m = rotaryRef();
+  if (m != null && designExtent()){
+    el("line", {x1:ROT_X0, y1:m, x2:ROT_X1, y2:m, stroke:"#5CC8F0", "stroke-width":k * 1.6, "stroke-dasharray":`${k * 10} ${k * 5}`}, g);
+    if (Math.abs(m - y) > k * 26) tag(m - k * 8, "Centre of the design: lands on the top of the object", "#7FD6F5");
+  }
 }
 
 function objTransform(o){ return `translate(${o.x + o.w / 2} ${o.y + o.h / 2}) rotate(${o.rot || 0}) translate(${-o.w / 2} ${-o.h / 2})`; }
@@ -332,7 +458,10 @@ function drawObject(o){
   else if (o.type === "text" || o.type === "path"){
     const paths = o.type === "text" ? (o._outline && o._outline.paths) : o.paths, nw = o.type === "text" ? o._outline && o._outline.nat_w : o.nat_w, nh = o.type === "text" ? o._outline && o._outline.nat_h : o.nat_h;
     el("rect", {width:o.w, height:o.h, fill:"rgba(0,0,0,0)"}, g);   // easier to grab
-    if (paths && paths.length) el("path", {d:pathD(paths), transform:`scale(${o.w / nw} ${o.h / nh})`, "fill-rule":"nonzero", ...vis}, g);
+    if (paths && paths.length){
+      if (o.shape && o.shape.kind === "line") el("path", {d:pathD(paths), transform:`scale(${o.w / nw} ${o.h / nh})`, fill:"none", stroke:"rgba(0,0,0,0)", "stroke-width":px() * 12, "vector-effect":"non-scaling-stroke"}, g);
+      el("path", {d:pathD(paths), transform:`scale(${o.w / nw} ${o.h / nh})`, "fill-rule":"nonzero", ...vis}, g);
+    }
   } else if (o.type === "image"){
     const pc = procCache.get(o.id);
     el("rect", {width:o.w, height:o.h, fill:"#fff"}, g);
@@ -344,6 +473,7 @@ function drawObject(o){
 function drawSelection(o){
   const g = el("g", {transform:objTransform(o)}, svg), hs = px() * 9;
   el("rect", {x:0, y:0, width:o.w, height:o.h, fill:"none", stroke:"#F2B400", "stroke-width":px() * 1.4, "stroke-dasharray":`${px() * 5} ${px() * 3}`}, g);
+  if (isWrapped(o)) return;
   for (const [cx, cy, c] of [[0,0,"nw"],[o.w,0,"ne"],[0,o.h,"sw"],[o.w,o.h,"se"]])
     el("rect", {x:cx - hs / 2, y:cy - hs / 2, width:hs, height:hs, fill:"#fff", stroke:"#20262E", "stroke-width":px(), "data-handle":c, style:`cursor:${c}-resize`}, g);
   if (o.type !== "image"){
@@ -354,16 +484,24 @@ function drawSelection(o){
 
 // ---------------------------------------------------------------- pointer interaction
 let drag = null, spaceDown = false, measureMark = null;
+let head = {known:false, x:0, y:0, pointer:false};
 svg.addEventListener("pointerdown", ev => {
   svg.setPointerCapture(ev.pointerId);
   const p = screenToMm(ev), handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
   if (ev.button === 1 || spaceDown){ drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}}; return; }
   if (tool === "measure"){ doMeasure(p.x, p.y); return; }
-  if (tool === "rect" || tool === "ellipse"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
+  if (tool === "goto"){ setTool("select"); headCmd({action:"move", x:r3(p.x), y:r3(p.y), pointer:true}); return; }
+  if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
+  if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
   if (tool === "text"){ addText(p.x, p.y); setTool("select"); return; }
   if (handle && sel){ const o = obj(sel); snapshot(); drag = {kind: handle === "rot" ? "rot" : "resize", handle, o, start:clone(o), p0:p}; return; }
   const gEl = ev.target.closest && ev.target.closest("[data-id]");
-  if (gEl){ sel = gEl.getAttribute("data-id"); const o = obj(sel); snapshot(); drag = {kind:"move", o, p0:p, start:{x:o.x, y:o.y}, moved:false}; inspector(); render(); return; }
+  if (gEl){
+    sel = gEl.getAttribute("data-id"); const o = obj(sel); snapshot();
+    if (isWrapped(o)){ const c = wrapCentre(o); drag = {kind:"wrap", o, c, a0:Math.atan2(p.y - c[1], p.x - c[0]), shift0:+(o.text.wrap.shift || 0), moved:false}; }
+    else drag = {kind:"move", o, p0:p, start:{x:o.x, y:o.y}, moved:false};
+    inspector(); render(); return;
+  }
   sel = null; inspector(); render();
   drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}};
 });
@@ -371,6 +509,16 @@ svg.addEventListener("pointermove", ev => {
   if (!drag) return;
   const p = screenToMm(ev);
   if (drag.kind === "pan"){ const k = px(); view = {...drag.v, x: drag.v.x - (ev.clientX - drag.sx) * k, y: drag.v.y - (ev.clientY - drag.sy) * k}; applyView(); render(); return; }
+  if (drag.kind === "wrap"){
+    const o = drag.o, w = o.text.wrap; let a = (Math.atan2(p.y - drag.c[1], p.x - drag.c[0]) - drag.a0) * 180 / Math.PI;
+    a = ((a + 540) % 360) - 180; w.shift = Math.round((drag.shift0 + (w.side === "inside" ? -a : a)) * 10) / 10; drag.moved = true;
+    rewrapSoon(o); return;
+  }
+  if (drag.kind === "draw" && tool === "line"){
+    drag.x1 = p.x; drag.y1 = p.y;
+    if (ev.shiftKey){ const dx = p.x - drag.x0, dy = p.y - drag.y0, L = Math.hypot(dx, dy), q = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * Math.PI / 4; drag.x1 = drag.x0 + L * Math.cos(q); drag.y1 = drag.y0 + L * Math.sin(q); }
+    render(); return;
+  }
   if (drag.kind === "draw"){ drag.x1 = p.x; drag.y1 = p.y; if (ev.shiftKey){ const s = Math.max(Math.abs(p.x - drag.x0), Math.abs(p.y - drag.y0)); drag.x1 = drag.x0 + Math.sign(p.x - drag.x0 || 1) * s; drag.y1 = drag.y0 + Math.sign(p.y - drag.y0 || 1) * s; } render(); return; }
   const o = drag.o;
   if (drag.kind === "move"){ o.x = r3(drag.start.x + p.x - drag.p0.x); o.y = r3(drag.start.y + p.y - drag.p0.y); drag.moved = true; render(); inspectorValues(); return; }
@@ -392,13 +540,24 @@ svg.addEventListener("pointermove", ev => {
 svg.addEventListener("pointerup", ev => {
   if (!drag) return;
   const d = drag; drag = null;
+  if (d.kind === "draw" && tool === "line"){
+    if (Math.hypot(d.x1 - d.x0, d.y1 - d.y0) > 1){ snapshot(); const o = makeLine(d.x0, d.y0, d.x1, d.y1); D.objects.push(o); sel = o.id; }
+    setTool("select"); inspector(); render(); estimate(); autosave(); return;
+  }
   if (d.kind === "draw"){
     const x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1), w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
-    if (w > 1 && h > 1){ snapshot(); const o = {id:uid(), type:tool, x:r3(x), y:r3(y), w:r3(w), h:r3(h), rot:0, op:{mode:"score", ...DEFAULT_OP.score}}; D.objects.push(o); sel = o.id; }
+    if (w > 1 && h > 1){
+      snapshot();
+      const o = {id:uid(), type:tool === "shape" ? "path" : tool, x:r3(x), y:r3(y), w:r3(w), h:r3(h), rot:0, op:{mode:"score", ...DEFAULT_OP.score}};
+      if (tool === "shape"){ o.shape = {...SHAPE_DEFAULT, kind:lastShapeKind}; regenShape(o); }
+      D.objects.push(o); sel = o.id;
+    }
     setTool("select"); inspector(); render(); autosave(); return;
   }
-  if (d.kind === "move" && !d.moved) history.pop();
-  if (["move","resize","rot"].includes(d.kind)){ if (d.o.type === "image") processImage(d.o); estimate(); autosave(); }
+  if ((d.kind === "move" || d.kind === "wrap") && !d.moved) history.pop();
+  if (d.kind === "resize" && d.o.shape) regenShape(d.o);
+  if (["move","resize","rot"].includes(d.kind)){ if (d.o.type === "image") processImage(d.o); rewrapFor(d.o); estimate(); autosave(); }
+  if (d.kind === "wrap" && d.moved){ rewrapSoon(d.o); inspector(); estimate(); autosave(); }
   render();
 });
 svg.addEventListener("wheel", ev => { ev.preventDefault(); const p = screenToMm(ev); zoom(ev.deltaY > 0 ? 1.15 : 1 / 1.15, p.x, p.y); }, {passive:false});
@@ -411,11 +570,11 @@ document.addEventListener("keydown", ev => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "y" && !typing){ ev.preventDefault(); redo(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "d" && !typing && sel){ ev.preventDefault(); duplicate(); return; }
   if (typing) return;
-  if ((ev.key === "Delete" || ev.key === "Backspace") && sel){ snapshot(); D.objects = D.objects.filter(o => o.id !== sel); sel = null; inspector(); render(); estimate(); return; }
-  if (ev.key === "Escape"){ sel = null; setTool("select"); inspector(); render(); return; }
+  if ((ev.key === "Delete" || ev.key === "Backspace") && sel){ snapshot(); unwrapFor(sel); D.objects = D.objects.filter(o => o.id !== sel); sel = null; inspector(); render(); estimate(); return; }
+  if (ev.key === "Escape"){ sel = null; setTool("select"); showHeadPanel(false); inspector(); render(); return; }
   const arrows = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
   if (arrows[ev.key] && sel){ ev.preventDefault(); const o = obj(sel), s = ev.shiftKey ? 10 : 1; snapshot(); o.x = r3(o.x + arrows[ev.key][0] * s); o.y = r3(o.y + arrows[ev.key][1] * s); render(); inspectorValues(); return; }
-  const keys = {v:"select", r:"rect", e:"ellipse", t:"text"};
+  const keys = {v:"select", r:"rect", e:"ellipse", t:"text", l:"line", p:"shape"};
   if (keys[ev.key.toLowerCase()]) setTool(keys[ev.key.toLowerCase()]);
 });
 document.addEventListener("keyup", ev => { if (ev.key === " ") spaceDown = false; });
@@ -424,7 +583,10 @@ function duplicate(){ const o = obj(sel); if (!o) return; snapshot(); const c = 
 
 const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom · Delete removes · Ctrl+D duplicates",
   rect:"Drag on the bed to draw a rectangle (Shift for a square)", ellipse:"Drag on the bed to draw an ellipse (Shift for a circle)",
-  text:"Click on the bed where the text should go", measure:"Click the spot on the material to measure. The head will move there."};
+  text:"Click on the bed where the text should go",
+  line:"Drag to draw a line (Shift snaps to 45°)", shape:"Drag on the bed to draw a shape (Shift keeps it even). Change the shape on the right.", measure:"Click the spot on the material to measure. The head moves so its height sensor (right of the laser) is over it.",
+  goto:"Click where the head should go; the red pointer turns on there",
+  rotline:"Click the top line of the object (where the laser should touch it first)"};
 function setTool(t){ tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
 
@@ -433,20 +595,35 @@ const F = id => document.getElementById(id);
 function inspector(){
   const o = sel && obj(sel);
   $("#objEmpty").classList.toggle("hidden", !!o); $("#objFields").classList.toggle("hidden", !o); $("#laserSec").classList.toggle("hidden", !o);
-  $("#objTitle").textContent = o ? ({rect:"Rectangle", ellipse:"Ellipse", text:"Text", image:"Picture", path:"Imported shape"}[o.type]) : "Nothing selected";
+  $("#objTitle").textContent = o ? (o.shape ? {line:"Line", polygon:"Polygon", star:"Star", rounded:"Rounded rectangle", heart:"Heart"}[o.shape.kind] : {rect:"Rectangle", ellipse:"Ellipse", text:isWrapped(o) ? "Wrapped text" : "Text", image:"Picture", path:"Imported shape"}[o.type]) : "Nothing selected";
   if (!o) return;
   $("#textFields").classList.toggle("hidden", o.type !== "text"); $("#imgFields").classList.toggle("hidden", o.type !== "image");
-  F("frot").disabled = o.type === "image";
+  $("#shapeFields").classList.toggle("hidden", !o.shape || o.shape.kind === "line");
+  if (o.shape && o.shape.kind !== "line"){
+    const k = o.shape.kind; F("skind").value = k; F("ssides").value = o.shape.sides; F("sinner").value = o.shape.inner; F("sradius").value = o.shape.radius;
+    F("ssidesF").classList.toggle("hidden", !(k === "polygon" || k === "star")); F("ssidesLbl").textContent = k === "star" ? "Points" : "Sides";
+    F("sinnerF").classList.toggle("hidden", k !== "star"); F("sradiusF").classList.toggle("hidden", k !== "rounded");
+  }
+  const wrapped = isWrapped(o);
+  F("frot").disabled = o.type === "image" || wrapped;
+  for (const id of ["fx","fy","fw","fh"]) F(id).disabled = wrapped;
+  if (o.type === "text"){
+    const ws = F("twrap"); ws.innerHTML = "<option value=''>Nothing (straight text)</option>";
+    for (const t of D.objects) if (canWrapAround(t)){ const op = document.createElement("option"); op.value = t.id; op.textContent = `${objName(t)} ${r3(t.w).toFixed(0)}×${r3(t.h).toFixed(0)} at ${r3(t.x).toFixed(0)}, ${r3(t.y).toFixed(0)}`; ws.append(op); }
+    const w = o.text.wrap || {}; ws.value = w.target || ""; F("tside").value = w.side || "outside"; F("tgap").value = w.gap ?? 1; F("tshift").value = w.shift || 0;
+    for (const e of document.querySelectorAll(".wrapF")) e.classList.toggle("hidden", !wrapped);
+  }
   if (o.type === "text"){ F("ttext").value = o.text.content; F("tfont").value = o.text.font; F("tsize").value = o.text.size; F("talign").value = o.text.align || "left"; }
   if (o.type === "image"){ const a = o.adj || {}; F("ibright").value = a.brightness || 0; F("icontrast").value = a.contrast || 0; F("igamma").value = a.gamma || 1; F("iinvert").checked = !!a.invert; const pc = procCache.get(o.id); $("#imgprev").src = pc ? pc.url : ""; }
   for (const b of document.querySelectorAll("#modes button")){
     const m = b.dataset.m; b.setAttribute("aria-pressed", o.op.mode === m);
-    b.disabled = o.type === "image" ? !(m === "image" || m === "off") : m === "image";
+    b.disabled = o.type === "image" ? !(m === "image" || m === "off") : (m === "image" || (m === "fill" && o.shape && o.shape.kind === "line"));
   }
   inspectorValues();
 }
 function inspectorValues(){
   const o = sel && obj(sel); if (!o) return;
+  if (isWrapped(o) && document.activeElement !== F("tshift")) F("tshift").value = o.text.wrap.shift || 0;
   for (const [id, k] of [["fx","x"],["fy","y"],["fw","w"],["fh","h"],["frot","rot"]]) if (document.activeElement !== F(id)) F(id).value = r3(o[k] || 0);
   const op = o.op, m = op.mode;
   F("lpower").value = op.power ?? ""; F("lspeed").value = op.speed ?? ""; F("lpasses").value = op.passes ?? 1; F("lair").value = op.air ?? 25;
@@ -460,8 +637,9 @@ function inspectorValues(){
 }
 function bindNum(id, fn){ F(id).addEventListener("change", () => { const o = obj(sel); if (!o) return; const v = parseFloat(F(id).value); if (!isFinite(v)) return inspectorValues(); snapshot(); fn(o, v); render(); inspectorValues(); estimate(); }); }
 bindNum("fx", (o, v) => o.x = v); bindNum("fy", (o, v) => o.y = v); bindNum("frot", (o, v) => o.rot = ((v % 360) + 360) % 360);
-bindNum("fw", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.h = r3(o.h * v / o.w); o.w = v; if (o.type === "image") processImage(o); });
-bindNum("fh", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.w = r3(o.w * v / o.h); o.h = v; if (o.type === "image") processImage(o); });
+bindNum("fw", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.h = r3(o.h * v / o.w); o.w = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
+bindNum("fh", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.w = r3(o.w * v / o.h); o.h = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
+for (const id of ["fx","fy","fw","fh","frot"]) F(id).addEventListener("change", () => { const o = obj(sel); if (o) rewrapFor(o); });
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 bindNum("lpower", (o, v) => o.op.power = clamp(v, 1, 100)); bindNum("lspeed", (o, v) => o.op.speed = clamp(v, 1, 1000));
 bindNum("lpasses", (o, v) => o.op.passes = clamp(Math.round(v), 1, 50)); bindNum("lair", (o, v) => o.op.air = clamp(v, 0, 100));
@@ -484,9 +662,74 @@ for (const id of ["ttext","tsize","talign","tfont"]) F(id).addEventListener(id =
     await refreshText(o, id !== "tsize"); render(); inspectorValues(); estimate();
   }, id === "ttext" ? 350 : 0);
 });
+for (const id of ["twrap","tside","tgap","tshift"]) F(id).addEventListener("change", async () => {
+  const o = obj(sel); if (!o || o.type !== "text") return;
+  snapshot();
+  const target = F("twrap").value;
+  if (!target){ if (o.text.wrap){ delete o.text.wrap; o.rot = 0; await refreshText(o, false); } }
+  else {
+    const was = !!o.text.wrap;
+    o.text.wrap = {target, side:F("tside").value, gap:parseFloat(F("tgap").value), shift:parseFloat(F("tshift").value) || 0};
+    if (!isFinite(o.text.wrap.gap)) o.text.wrap.gap = 1;
+    if (!was){ o.text.wrap.shift = 0; o.text.wrap.gap = 1; }
+    await refreshText(o, false);
+  }
+  render(); inspector(); estimate(); autosave();
+});
+for (const id of ["skind","ssides","sinner","sradius"]) F(id).addEventListener("change", () => {
+  const o = obj(sel); if (!o || !o.shape) return;
+  snapshot();
+  const k = F("skind").value; lastShapeKind = k;
+  o.shape = {...o.shape, kind:k, sides:clamp(Math.round(+F("ssides").value || 6), 3, 40), inner:clamp(+F("sinner").value || 50, 10, 95), radius:Math.max(0, +F("sradius").value || 0)};
+  regenShape(o); rewrapFor(o); render(); inspector(); estimate(); autosave();
+});
 for (const id of ["ibright","icontrast","igamma","iinvert"]) F(id).addEventListener(id === "iinvert" ? "change" : "input", () => {
   const o = obj(sel); if (!o) return; o.adj = {brightness:+F("ibright").value, contrast:+F("icontrast").value, gamma:+F("igamma").value, invert:F("iinvert").checked}; processImage(o);
 });
+
+// ---------------------------------------------------------------- shapes, lines and wrapped text
+const SHAPE_DEFAULT = {kind:"polygon", sides:6, inner:45, radius:5};
+let lastShapeKind = "polygon";
+function objName(o){ return o.shape ? {polygon:"Polygon", star:"Star", rounded:"Rounded rectangle", heart:"Heart", line:"Line"}[o.shape.kind] : {rect:"Rectangle", ellipse:"Ellipse", path:"Imported shape"}[o.type] || o.type; }
+const isWrapped = o => !!(o && o.type === "text" && o.text && o.text.wrap && o.text.wrap.target);
+const canWrapAround = o => (o.type === "rect" || o.type === "ellipse" || o.type === "path") && !(o.shape && o.shape.kind === "line");
+function wrapCentre(o){ const t = obj(o.text.wrap.target); return t ? [t.x + t.w / 2, t.y + t.h / 2] : [o.x + o.w / 2, o.y + o.h / 2]; }
+// a line is an open path inside its box, from one corner to the opposite one
+function makeLine(x0, y0, x1, y1){
+  const w = Math.max(Math.abs(x1 - x0), 0.01), h = Math.max(Math.abs(y1 - y0), 0.01), down = (x1 - x0) * (y1 - y0) >= 0;
+  const o = {id:uid(), type:"path", shape:{kind:"line", down}, x:r3(Math.min(x0, x1)), y:r3(Math.min(y0, y1)), w:r3(w), h:r3(h), rot:0, op:{mode:"score", ...DEFAULT_OP.score}};
+  regenShape(o); return o;
+}
+// shape outlines are rebuilt from their settings at the object's current size (so corners stay round)
+function regenShape(o){
+  const s = o.shape, w = Math.max(o.w, 0.01), h = Math.max(o.h, 0.01);
+  let pts = [];
+  if (s.kind === "line"){ o.paths = [s.down ? [[0, 0], [w, h]] : [[0, h], [w, 0]]]; o.nat_w = w; o.nat_h = h; return; }
+  if (s.kind === "polygon" || s.kind === "star"){
+    const n = s.kind === "star" ? s.sides * 2 : s.sides, k = s.inner / 100;
+    for (let i = 0; i < n; i++){ const a = -Math.PI / 2 + 2 * Math.PI * i / n, r = s.kind === "star" && i % 2 ? k : 1; pts.push([Math.cos(a) * r, Math.sin(a) * r]); }
+  } else if (s.kind === "rounded"){
+    const r = Math.min(s.radius, w / 2, h / 2), seg = Math.max(4, Math.ceil(r * Math.PI / 2 / 0.3));
+    const corners = [[w - r, r, -90], [w - r, h - r, 0], [r, h - r, 90], [r, r, 180]];
+    for (const [cx, cy, a0] of corners) for (let i = 0; i <= seg; i++){ const a = (a0 + 90 * i / seg) * Math.PI / 180; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+    o.paths = [[...pts, pts[0]].map(([x, y]) => [r3(x), r3(y)])]; o.nat_w = w; o.nat_h = h; return;
+  } else if (s.kind === "heart"){
+    for (let i = 0; i < 240; i++){ const t = 2 * Math.PI * i / 240; pts.push([16 * Math.sin(t) ** 3, -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t))]); }
+  }
+  // fit the outline to the box exactly
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), x0 = Math.min(...xs), y0 = Math.min(...ys), sx = w / (Math.max(...xs) - x0), sy = h / (Math.max(...ys) - y0);
+  pts = pts.map(([x, y]) => [r3((x - x0) * sx), r3((y - y0) * sy)]);
+  o.paths = [[...pts, pts[0]]]; o.nat_w = w; o.nat_h = h;
+}
+// texts wrapped round `t` follow it when it changes
+async function rewrapFor(t){ for (const o of D.objects) if (isWrapped(o) && o.text.wrap.target === t.id) await refreshText(o, false); render(); }
+function unwrapFor(id){ for (const o of D.objects) if (isWrapped(o) && o.text.wrap.target === id){ delete o.text.wrap; refreshText(o, false).then(render); } }
+let wrapBusy = false, wrapAgain = null;
+async function rewrapSoon(o){
+  if (wrapBusy){ wrapAgain = o; return; }
+  wrapBusy = true; await refreshText(o, false); render(); inspectorValues(); wrapBusy = false;
+  if (wrapAgain){ const n = wrapAgain; wrapAgain = null; rewrapSoon(n); }
+}
 
 // ---------------------------------------------------------------- text
 async function loadFonts(){
@@ -497,6 +740,18 @@ async function loadFonts(){
 }
 function defaultFont(){ const pref = ["Arial","Segoe UI","Calibri","DejaVu Sans","Liberation Sans"]; for (const n of pref){ const f = fonts.find(f => f.family === n && /regular|normal|book/i.test(f.style)); if (f) return f.id; } return fonts[0] ? fonts[0].id : ""; }
 async function refreshText(o, keepScale){
+  if (isWrapped(o)){
+    const t = obj(o.text.wrap.target);
+    if (!t){ delete o.text.wrap; }
+    else {
+      try {
+        const tc = {...t}; delete tc._outline;
+        const r = await api("/api/text", {...o.text, target_obj:tc});
+        o.x = r3(r.x); o.y = r3(r.y); o.w = r3(r.nat_w); o.h = r3(r.nat_h); o.rot = 0; o.nat_w = r.nat_w; o.nat_h = r.nat_h; o._outline = r;
+      } catch(e){ toast(e.message, true); }
+      return;
+    }
+  }
   try {
     const r = await api("/api/text", o.text);
     if (keepScale && o.nat_w){ const sx = o.w / o.nat_w, sy = o.h / o.nat_h; o.w = r3(r.nat_w * sx); o.h = r3(r.nat_h * sy); }
@@ -588,6 +843,7 @@ F("importFile").onchange = async () => {
       const r = await api("/api/import_xcs", JSON.parse(text));
       snapshot(); for (const o of r.objects) D.objects.push({...o, id:uid()});
       if (r.focal != null && D.focal == null){ D.focal = r.focal; F("focal").value = r.focal; }
+      if (r.rotary){ D.rotary = {...ROT_DEFAULT, ...D.rotary, ...r.rotary, diameter:r.rotary.diameter || (D.rotary && D.rotary.diameter) || null, on:true}; rotaryUI(); }
       toast(`Imported ${r.objects.length} shape(s) from ${file.name}` + (r.skipped.length ? `. Not supported yet: ${[...new Set(r.skipped)].join(", ")}` : ""));
     } else importSVG(text, file.name);
     render(); estimate();
@@ -639,7 +895,10 @@ function payload(){
     objs.push(c);
   }
   const focal = parseFloat(F("focal").value);
-  return {focal:isFinite(focal) ? focal : null, fan_gear:D.fan_gear, purifier_gear:D.purifier_gear, objects:objs};
+  const out = {focal:isFinite(focal) ? focal : null, fan_gear:D.fan_gear, purifier_gear:D.purifier_gear, objects:objs};
+  const r = rotary();
+  if (r) out.rotary = {type:r.type, diameter:r.diameter > 0 ? r.diameter : null, axis_y:r.axis_y, align:r.align || "center"};
+  return out;
 }
 let estTimer = null;
 function estimate(){
@@ -664,9 +923,11 @@ $("#send").onclick = async () => {
   let warn = "";
   if (!isFinite(focal)) warn += "<p><b>No focus height is set.</b> Use Measure first, or the laser will engrave at the bed's current height.</p>";
   if (status.connected && status.lidClosed === false) warn += "<p>The lid is open. Close it before pressing Start.</p>";
+  const rr = rotary();
+  if (rr) warn += `<p><b>Rotary job (${rr.type === "chuck" ? "chuck" : "rollers"}).</b> The head moves over Y ${rr.axis_y} mm and the object turns from where it sits now, so turn ${rr.align === "edge" ? "the spot where the design should start" : "the spot for the centre of the design"} to the top first. Check the rotary is plugged into the 4-pin port and the object can turn freely.</p>`;
   let allow = false;
   if (r.has_raster && !r.raster_verified){
-    warn += `<p><b>Fill and picture engraving are experimental.</b> Their move format hasn't been checked against xTool Studio's output yet. Run them only on scrap, stay at the machine, and be ready to press Stop.</p>
+    warn += `<p><b>Fill and picture engraving ${rr ? "on the rotary are" : "are"} experimental.</b> Their move format hasn't been checked against xTool Studio's output yet. Run them only on scrap, stay at the machine, and be ready to press Stop.</p>
       <label class="chk"><input type="checkbox" id="allowExp"> I understand, load it anyway</label>`;
   }
   const ok = await dialog("Load this job?", `<p>About ${fmtTime(r.seconds)} of laser time. Focus Z ${isFinite(focal) ? focal + " mm" : "not set"}.</p>${warn}
@@ -681,15 +942,105 @@ $("#send").onclick = async () => {
 $("#pauseBtn").onclick = async () => { try { await api("/api/pause", {}); toast("Pause sent."); } catch(e){ toast(e.message, true); } };
 $("#stopBtn").onclick = async () => { try { await api("/api/stop", {}); toast("Stop sent."); } catch(e){ toast(e.message, true); } };
 
+// ---------------------------------------------------------------- laser head: jog, red pointer, job start
+async function headCmd(body, quiet){
+  if (!status.connected){ toast("Connect to the laser first.", true); return null; }
+  try {
+    const r = await api("/api/head", body);
+    if (r.x != null){ head.x = r.x; head.y = r.y; head.known = true; }
+    if (body.pointer === true || body.action === "start" || body.action === "frame") head.pointer = true;
+    if (body.action === "home") head.pointer = false;
+    if (body.action === "pointer") head.pointer = !!body.on;
+    F("pointerOn").checked = head.pointer;
+    $("#headPos").textContent = head.known ? `at ${head.x.toFixed(1)}, ${head.y.toFixed(1)} mm` : "";
+    render(); return r;
+  } catch(e){ if (!quiet) toast(e.message, true); return null; }
+}
+for (const b of document.querySelectorAll("[data-jog]")) b.onclick = () => {
+  const [sx, sy] = b.dataset.jog.split(",").map(Number), st = +F("jogStep").value;
+  headCmd({action:"move", dx:sx * st, dy:sy * st});
+};
+F("headHome").onclick = () => headCmd({action:"home"});
+F("pointerOn").onchange = () => headCmd({action:"pointer", on:F("pointerOn").checked});
+F("headGoto").onclick = () => { if (!status.connected) return toast("Connect to the laser first.", true); setTool("goto"); };
+F("headStart").onclick = async () => {
+  let d; try { d = payload(); } catch(e){ return toast(e.message, true); }
+  const r = await headCmd({action:"start", design:d});
+  if (r) toast(`Red pointer is at the job's start: ${r.start[0].toFixed(1)}, ${r.start[1].toFixed(1)} mm.` + (r.rotary ? " On the rotary this is where the head sits over the object's top line." : ""));
+};
+F("headFrame").onclick = async () => {
+  let d; try { d = payload(); } catch(e){ return toast(e.message, true); }
+  toast("Tracing the job outline with the red pointer…");
+  const r = await headCmd({action:"frame", design:d});
+  if (r) toast("Done: the pointer is parked at the job's start.");
+};
+for (const [id, key] of [["ptrDx", "pointer_dx"], ["ptrDy", "pointer_dy"]]){
+  F(id).addEventListener("change", async () => { const v = parseFloat(F(id).value); settings[key] = isFinite(v) ? v : 0; await api("/api/settings", {[key]:settings[key]}).catch(() => {}); toast("Saved. Head moves now allow for it."); });
+}
+function showHeadPanel(on){
+  F("headPanel").classList.toggle("hidden", !on); F("headTool").setAttribute("aria-pressed", on);
+  if (!on) return;
+  F("ptrDx").value = settings.pointer_dx || ""; F("ptrDy").value = settings.pointer_dy || "";
+  if (status.connected) headCmd({action:"where"}, true);
+}
+F("headTool").onclick = () => showHeadPanel(F("headPanel").classList.contains("hidden"));
+F("headClose").onclick = () => showHeadPanel(false);
+
+// ---------------------------------------------------------------- rotary attachment
+function rotaryUI(){
+  if (!D.rotary) D.rotary = {...ROT_DEFAULT};
+  const r = D.rotary;
+  F("rotOn").checked = !!r.on; F("rotFields").classList.toggle("hidden", !r.on);
+  if (!r.align) r.align = "center";
+  F("rotType").value = r.type; F("rotDia").value = r.diameter ?? ""; F("rotY").value = r.axis_y; F("rotAlign").value = r.align;
+  F("rotSnap").classList.toggle("hidden", r.align !== "center");
+  const c = circumference();
+  F("rotNote").textContent = !r.on ? "" :
+    (r.type === "chuck" && !c ? "The chuck needs the object's diameter to turn the right amount. " : "") +
+    (r.align === "center"
+      ? "The middle of the design is engraved on the top of the object, half wrapping each way. Turn the object so the spot for the centre of the design faces up. "
+      : "Designs above the line wrap round the object, starting at its top. ") +
+    (c ? `One turn is ${c.toFixed(1)} mm. ` : "Enter the diameter to see one full turn on the bed. ") +
+    "Measure focus on the top of the object, on the laser line.";
+}
+function rotaryChanged(){
+  snapshot();
+  const r = D.rotary, d = parseFloat(F("rotDia").value), y = parseFloat(F("rotY").value);
+  r.on = F("rotOn").checked; r.type = F("rotType").value; r.align = F("rotAlign").value;
+  r.diameter = isFinite(d) && d > 0 ? d : null;
+  if (isFinite(y)) r.axis_y = Math.min(BED_H, Math.max(0, y));
+  rotaryUI(); fitView(); estimate(); autosave();
+}
+for (const id of ["rotOn", "rotType", "rotDia", "rotY", "rotAlign"]) F(id).addEventListener("change", rotaryChanged);
+F("rotSnap").onclick = () => {
+  const e = designExtent(); if (!e) return toast("Nothing to move yet.");
+  snapshot(); const dy = r3(D.rotary.axis_y - (e[0] + e[1]) / 2);
+  for (const o of D.objects) o.y = r3(o.y + dy);
+  render(); inspector(); estimate(); autosave();
+};
+F("rotPick").onclick = () => setTool("rotline");
+
 // ---------------------------------------------------------------- focus height
 F("focal").addEventListener("change", () => { const v = parseFloat(F("focal").value); D.focal = isFinite(v) ? v : null; autosave(); if (cam.raw) dewarpCamera(); estimate(); });
 $("#measureBtn").onclick = () => { if (!status.connected) return toast("Connect to the laser first.", true); setTool("measure"); };
 async function doMeasure(x, y){
   if (!status.connected){ toast("Connect to the laser first.", true); setTool("select"); return; }
   measureMark = {x, y}; render();
-  const go = await dialog("Measure here?", `<p>The head moves so its height sensor sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home.</p><p>Keep hands clear of the head.</p>`, [["Cancel", false], ["Measure", true, "primary"]]);
+  const sh = settings.ir_shift_x ?? "";
+  const go = await dialog("Measure here?", `<p>The head moves so its height sensor (to the right of the laser) sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home. The laser itself ends up to the left of the spot.</p>
+    <p><b>Show the spot</b> first to see a head-camera photo of the red measuring laser on your material, and nudge it if it's off the part.</p><p>Keep hands clear of the head.</p>
+    <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Sensor always lands off the spot?</summary>
+    <p class="muted">Leave blank for automatic (50 mm). If the sensor reads to the right of where you click, raise this by that many mm; if it reads to the left, lower it.</p>
+    <label class="f">Extra shift left (mm)<input id="irShift" type="number" step="0.5" value="${sh}" placeholder="automatic"></label></details>`,
+    [["Cancel", false], ["Show the spot", "spot"], ["Measure", true, "primary"]]);
+  const shv = (document.getElementById("irShift") || {}).value;
+  if (go && shv !== undefined && String(shv) !== String(sh)){
+    settings.ir_shift_x = shv === "" ? null : +shv;
+    await api("/api/settings", {ir_shift_x:settings.ir_shift_x}).catch(() => {});
+  }
   setTool("select");
   if (!go){ measureMark = null; render(); return; }
+  if (go === "spot"){ const p = await showSpot(x, y); if (!p){ measureMark = null; render(); return; } x = p.x; y = p.y; }
   try {
     toast("Measuring…");
     const r = await api("/api/measure", {x, y});
@@ -697,6 +1048,62 @@ async function doMeasure(x, y){
     else { F("focal").value = r.focal; D.focal = r.focal; autosave(); toast(`Distance ${r.distance.toFixed(2)} mm, so focus Z is ${r.focal} mm.`); if (cam.raw) dewarpCamera(); }
   } catch(e){ toast(e.message, true); }
   measureMark = null; render(); estimate();
+}
+
+// Head-camera check: park the sensor over the spot with the red measuring laser on and
+// show the photo, so the user can see where the reading will come from. Arrows nudge
+// the spot on the bed and take a new photo. Returns the final {x, y}, or null if cancelled.
+async function showSpot(x, y){
+  const dlg = $("#dlg"), wide = dlg.style.maxWidth;
+  dlg.style.maxWidth = "760px";
+  try {
+    for (;;){
+      measureMark = {x, y}; render();
+      toast("Moving the head and taking a photo…");
+      let r;
+      try { r = await api("/api/measure_preview", {x, y}); }
+      catch(e){ toast(e.message, true); return null; }
+      const url = "data:image/jpeg;base64," + r.jpeg;
+      window._nudge = null;
+      const nb = (dx, dy, label, title) => `<button class="btn small" title="${title}" onclick="window._nudge=[${dx},${dy}];document.getElementById('dlg').close('nudge')">${label}</button>`;
+      const pending = dialog("Is the red dot on your part?", `<div style="position:relative"><img id="spotImg" src="${url}" alt="Head camera photo with the measuring laser on" style="width:100%;border-radius:4px;display:block"><canvas id="spotMark" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas></div>
+        <p class="muted" id="spotNote">Looking for the red dot…</p>
+        <div class="row" style="flex-wrap:wrap"><span class="muted">Nudge the spot on the bed (5 mm):</span>${nb(-5,0,"← Left","Move the spot 5 mm left")}${nb(5,0,"Right →","Move the spot 5 mm right")}${nb(0,-5,"↑ Back","Move the spot 5 mm toward the back")}${nb(0,5,"Front ↓","Move the spot 5 mm toward the front")}</div>
+        <p class="muted">Spot at ${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm on the bed.</p>`,
+        [["Cancel", false], ["Measure here", true, "primary"]]);
+      markRedDot();
+      const ans = await pending;
+      if (window._nudge){ x += window._nudge[0]; y += window._nudge[1]; continue; }
+      if (ans) return {x, y};
+      api("/api/measure_cancel", {}).catch(() => {});
+      return null;
+    }
+  } finally { dlg.style.maxWidth = wide; }
+}
+
+// Find the measuring laser in the photo: the brightest strongly red blob.
+function markRedDot(){
+  const img = document.getElementById("spotImg"), cv = document.getElementById("spotMark"), note = document.getElementById("spotNote");
+  if (!img) return;
+  const run = () => {
+    const W = 480, H = Math.round(W * img.naturalHeight / Math.max(1, img.naturalWidth));
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const g = c.getContext("2d"); g.drawImage(img, 0, 0, W, H);
+    const d = g.getImageData(0, 0, W, H).data;
+    let best = 0, bx = 0, by = 0;
+    const score = new Float32Array(W * H);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++){ const r = d[i], gg = d[i + 1], b = d[i + 2], v = r - Math.max(gg, b); score[p] = r > 120 && v > 60 ? v + r * 0.3 : 0; if (score[p] > best){ best = score[p]; bx = p % W; by = (p / W) | 0; } }
+    cv.width = W; cv.height = H;
+    if (!best){ note.textContent = "Couldn't pick out the red dot automatically; look for it in the photo."; return; }
+    // centroid of strong red pixels near the brightest one
+    let sx = 0, sy = 0, n = 0;
+    for (let yy = Math.max(0, by - 30); yy < Math.min(H, by + 30); yy++) for (let xx = Math.max(0, bx - 30); xx < Math.min(W, bx + 30); xx++){ const v = score[yy * W + xx]; if (v > best * 0.6){ sx += xx * v; sy += yy * v; n += v; } }
+    const cx = sx / n, cy = sy / n, k = cv.getContext("2d");
+    k.strokeStyle = "#F2B400"; k.lineWidth = 3; k.beginPath(); k.arc(cx, cy, 14, 0, Math.PI * 2); k.stroke();
+    k.beginPath(); k.moveTo(cx - 24, cy); k.lineTo(cx - 16, cy); k.moveTo(cx + 16, cy); k.lineTo(cx + 24, cy); k.moveTo(cx, cy - 24); k.lineTo(cx, cy - 16); k.moveTo(cx, cy + 16); k.lineTo(cx, cy + 24); k.stroke();
+    note.textContent = "The circle marks the red measuring laser. The reading is taken where it lands.";
+  };
+  if (img.complete && img.naturalWidth) run(); else img.onload = run;
 }
 
 // ---------------------------------------------------------------- camera
@@ -763,7 +1170,12 @@ function dewarpCamera(){
 $("#connectBtn").onclick = async () => {
   if (status.connected){ await api("/api/disconnect", {}).catch(() => {}); status = {connected:false}; showStatus(); return; }
   $("#connectBtn").disabled = true; $("#connectBtn").textContent = "Connecting…";
-  try { const r = await api("/api/connect", {host:$("#host").value.trim() || "usb"}); toast(`Connected to ${r.info.deviceName || "the laser"}.`); await poll(); }
+  try {
+    const r = await api("/api/connect", {host:$("#host").value.trim() || "usb"}); await poll();
+    const c = r.info.compat || {}, notes = (c.findings || []).filter(f => f.level !== "ok");
+    if (!c.supported && c.findings) dialog("This laser isn't supported yet", `<p>${notes.map(f => f.message).join("</p><p>")}</p><p>You can still use the camera and design tools, but jobs won't be sent.</p>`, [["OK", true, "primary"]]);
+    else toast(`Connected to ${c.label || r.info.deviceName || "the laser"}.` + (notes.length ? " " + notes.map(f => f.message).join(" ") : ""));
+  }
   catch(e){ toast(e.message.includes("timed out") || e.message.includes("refused") ? "Couldn't reach the laser. Check the USB-C cable and power, and close xTool Studio completely." : e.message, true); }
   finally { $("#connectBtn").disabled = false; showStatus(); }
 };
@@ -781,7 +1193,9 @@ function showStatus(){
   st.querySelector(".txt").textContent = c ? modeText(status) : "Not connected";
   const facts = st.querySelector(".facts"); facts.innerHTML = "";
   if (c){
-    const add = (t, w) => { const s = document.createElement("span"); s.className = "pill" + (w ? " warn" : ""); s.textContent = t; facts.append(s); };
+    const add = (t, w) => { const s = document.createElement("span"); s.className = "pill" + (w ? " warn" : ""); s.textContent = t; facts.append(s); return s; };
+    const cp = status.compat;
+    if (cp){ const sp = add(cp.label, !cp.supported); }
     if (status.lidClosed != null) add(status.lidClosed ? "Lid closed" : "Lid open", !status.lidClosed);
     if (status.keyIn != null) add(status.keyIn ? "Key in" : "Key out", !status.keyIn);
     if (status.alarms && status.alarms.length) add("Alarm: " + JSON.stringify(status.alarms).slice(0, 60), true);
@@ -802,9 +1216,9 @@ F("openFile").onchange = async () => {
   try { const j = JSON.parse(await file.text()); snapshot(); D = j.design || j; await loadDesign(); toast(`Opened ${file.name}`); }
   catch(e){ toast("Couldn't open that file: " + e.message, true); }
 };
-$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[]}; sel = null; render(); inspector(); estimate(); };
+$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[], rotary:D.rotary}; rotaryUI(); sel = null; render(); inspector(); estimate(); };
 async function loadDesign(){
-  sel = null; F("focal").value = D.focal ?? "";
+  sel = null; F("focal").value = D.focal ?? ""; rotaryUI();
   for (const o of D.objects){ if (o.type === "text") await refreshText(o, true); if (o.type === "image"){ imgCache.delete(o.id); await ensureImage(o); } }
   render(); inspector(); estimate(); autosave();
 }
@@ -815,6 +1229,7 @@ async function loadDesign(){
   setTool("select");
   try { settings = await api("/api/settings"); } catch(e){}
   await loadFonts();
+  rotaryUI();
   try { const saved = JSON.parse(localStorage.getItem("p2s.design") || "null"); if (saved && saved.objects){ D = saved; await loadDesign(); } } catch(e){}
   fitView(); inspector(); await poll();
 })();

@@ -325,6 +325,30 @@ def text_paths(text: str, font_path: str, size_mm: float, *, index: int = 0,
     return paths, bbox
 
 
+def glyph_run(text: str, font_path: str, size_mm: float, *, index: int = 0,
+              letter_spacing_mm: float = 0.0, tol: float = 0.02):
+    """One line of text as separate glyphs, for setting text along a curve.
+
+    Returns ([(x, advance, contours), ...], total width, ascender, descender) in mm. Each glyph's
+    contours are in its own frame: origin at its left on the baseline, y down. Line breaks
+    become spaces.
+    """
+    f = load_font(font_path, index)
+    scale = size_mm / f.units_per_em
+    out, x, prev = [], 0.0, None
+    for ch in text.replace("\r", "").replace("\n", " "):
+        gid = f.cmap.get(ord(ch), 0)
+        if prev is not None:
+            x += f.kern.get((prev, gid), 0) * scale
+        adv = f.advance(gid) * scale
+        conts = [c for c in (_flatten(cont, scale, 0.0, 0.0, tol) for cont in f.contours(gid)) if len(c) >= 3]
+        out.append((x, adv, conts))
+        x += adv + letter_spacing_mm
+        prev = gid
+    width = max(0.0, x - letter_spacing_mm) if out else 0.0
+    return out, width, f.ascender * scale, f.descender * scale
+
+
 def font_dirs() -> list[str]:
     if sys.platform.startswith("win"):
         win = os.environ.get("WINDIR", r"C:\Windows")

@@ -26,7 +26,83 @@ BED_W, BED_H = 600, 305
 
 PROCESSING_CODE = {"VECTOR_ENGRAVING": "S1", "VECTOR_CUTTING": "S3",
                    "FILL_VECTOR_ENGRAVING": "S4", "BITMAP_ENGRAVING": "S2"}
-MODE_TOOL = {"LASER_PLANE": "T0", "HONEYCOMB_PANEL": "T0", "FREE_PLANE": "T0"}
+MODE_TOOL = {"LASER_PLANE": "T0", "HONEYCOMB_PANEL": "T0", "FREE_PLANE": "T0", "LASER_CYLINDER": "T1"}
+
+# --- Rotary attachment (RA2), LASER_CYLINDER mode -------------------------------------
+# Checked against a roller job Studio sent to the laser (fetched back from the P2S).
+# The plugin (Pct) maps Studio's rotated canvas to U (around the object) and X (along it);
+# in this app's bed-aligned view that is simply:
+#     X = x                              (along the object, same as the flat bed)
+#     U = sign * (y - axis_y)            (surface mm, measured from the top line)
+# Studio's work area starts at the line and runs toward the back of the machine, so
+# designs sit on or above the line (y <= axis_y): the Studio job had U from -23 to -47.
+# sign = +1 for rollers, -1 for the chuck (the chuck turns the object directly, rollers
+# turn it the other way through contact). The firmware converts U surface-mm into motor
+# steps with M535U<factor>: 0.59917 for rollers (fixed, independent of the object), and
+# 128 / circumference for the chuck. The head parks at Y = axis_y for the whole job.
+ROLLER_MULTIPLE = 0.59917
+CYL_X_MIN, CYL_X_MAX = 50, 550          # Studio's cylinder canvas: 500 mm long from X = 50
+ROTARY_VERIFIED = True                  # vector (score/cut) on rollers, against Studio's file
+ROTARY_RASTER_VERIFIED = False          # fill/photo on the rotary: format inferred, not seen yet
+
+
+class Rotary:
+    def __init__(self, cfg: dict):
+        self.type = cfg.get("type", "roller")
+        if self.type not in ("roller", "chuck"):
+            raise ValueError(f"unknown rotary type {self.type}")
+        if (cfg.get("model") or "ra2") != "ra2":
+            raise ValueError("only the RA2 rotary is supported")
+        self.diameter = float(cfg["diameter"]) if cfg.get("diameter") else None
+        self.axis_y = float(cfg.get("axis_y", 125))
+        # "center": the middle of the design goes to the top of the object (U = 0), half of it
+        #           wraps each way, so the object's centre line can be lined up with the laser.
+        # "edge":   Studio's way: the design is measured from the rotary line on the bed.
+        self.align = cfg.get("align", "center")
+        if self.align not in ("center", "edge"):
+            raise ValueError(f"unknown rotary alignment {self.align}")
+        self.ref_y = self.axis_y        # bed y that lands on top of the object; set per job
+        if self.type == "chuck" and not self.diameter:
+            raise ValueError("chuck mode needs the object's diameter")
+
+    @property
+    def sign(self) -> int:
+        return 1 if self.type == "roller" else -1
+
+    @property
+    def circumference(self):
+        return math.pi * self.diameter if self.diameter else None
+
+    @property
+    def multiple(self) -> float:
+        """The M535 U factor (plugin aze(): roller = rollerMultiple, chuck = 128 / perimeter)."""
+        return ROLLER_MULTIPLE if self.type == "roller" else 128 / self.circumference
+
+    def u(self, y: float) -> float:
+        return self.sign * (y - self.ref_y)
+
+
+def design_y_extent(job: Job):
+    """Top and bottom (bed y) of everything that gets engraved, raster lines included."""
+    ys = []
+    for e in job.elements:
+        ys += [y for path in e.paths for _, y in path]
+        half = 5.0 / max(1.0, e.density)                 # half a line pitch
+        for y, runs in e.rows:
+            if runs:
+                ys += [y - half, y + half]
+    return (min(ys), max(ys)) if ys else None
+
+
+def rotary_of(job: Job):
+    if not getattr(job, "rotary", None):
+        return None
+    r = Rotary(job.rotary)
+    if r.align == "center":
+        ext = design_y_extent(job)
+        if ext:
+            r.ref_y = (ext[0] + ext[1]) / 2
+    return r
 
 
 def accessories(job: Job) -> str:
@@ -55,9 +131,20 @@ def _num(v: float) -> str:
 
 
 def file_header(job: Job) -> str:
-    return (f"# date={time.strftime('%Y_%m_%d_%H_%M_%S')}\n"
-            "# version=p2s-tools\n"
-            "# algorithmVersion=1.7.5\n"
+    stamp = (f"# date={time.strftime('%Y_%m_%d_%H_%M_%S')}\n"
+             "# version=p2s-tools\n"
+             "# algorithmVersion=1.7.5\n")
+    r = rotary_of(job)
+    if r:
+        # Studio's cylinder canvas is 627 wide minus the axis line's position on it (250 - axis_y)
+        return (stamp +
+                f'# gc={{"size":{{"w":{_c(377 + r.axis_y)},"h":500}}}}\n'
+                '# gc={"offset":{"x":0,"y":50}}\n'
+                f'# gc={{"start":{{"x":0,"y":{r.axis_y:.4f}}}}}\n'
+                f'# gc={{"keys":["u","x"],"rm":{-r.sign},"is3DMode":false}}\n'
+                '# timeConfig={"vectorAccel":100,"bitmapAccel":3200,"thresholdAngle":174}\n'
+                "G90\nG0 F3000\n")
+    return (stamp +
             f'# gc={{"size":{{"w":{BED_W},"h":{BED_H}}}}}\n'
             '# gc={"offset":{"x":0,"y":0}}\n'
             '# gc={"start":{"x":0,"y":0.0000}}\n'
@@ -70,15 +157,17 @@ def head(job: Job, summary: Element) -> str:
     return ("\n# P2s HEAD\n"
             f'# WorkingInfo={{"mode":"{job.mode}"}}\n'
             f'# WorkingInfo={{"material":{json.dumps(job.material)}}}\n'
-            f'# WorkingInfo={{"focalLen":{json.dumps(job.focal_len)}}}\n'
+            f'# WorkingInfo={{"focalLen":{json.dumps(job.focal_len) if job.focal_len is None else _num(job.focal_len)}}}\n'
             f'# WorkingInfo={{"speed":{_num(summary.speed)}}}\n'
             f'# WorkingInfo={{"power":{_num(summary.power)}}}\n'
             + accessories(job) +
             f"M32X{ACCEL}\nG0 F{TRAVEL_FEED}\nG0 X0 Y0\n"
-            "M4 S0\nG1 F1000\nM19 S1\nM18 S0\n\n")
+            "M4 S0\nG1 F1000\nM19 S1\nM18 S0\n"
+            + (f"M535U{_num(rotary_of(job).multiple)}\nG0Y{_c(rotary_of(job).axis_y)}\n" if rotary_of(job) else "")
+            + "\n")
 
 
-def element_head(e: Element, mode: str) -> str:
+def element_head(e: Element, mode: str, start_y: float | None = None) -> str:
     """Per-element setup, from the plugin's Vct(): head template + blockConfig + M117/M2519/M15."""
     air = round(max(10, e.air) * 2.55) if e.air else 0
     codes = (f"M117{'S3' if e.processing_type == 'VECTOR_CUTTING' else 'S1'}\n"
@@ -92,7 +181,9 @@ def element_head(e: Element, mode: str) -> str:
     cfg = {"powerFactor": round(e.power * 10 / 1000, 3), "density": f"{e.density / 10:.2f}",
            "power": [_int_or(lo * 10), _int_or(hi * 10)],
            "bitmapMode": e.bitmap_mode or "grayscale", "isVector": False}
-    return ("# P2s BITMAP HEAD\nG4 P0.1\n\n\n\n# motion_start\n"
+    # plugin bitmapHead: "G0 Y<start.y>" when the job has a start Y (the rotary's axis line)
+    sy = f"G0 Y{_c(start_y)}" if start_y else ""
+    return (f"# P2s BITMAP HEAD\nG4 P0.1\n\n{sy}\n\n# motion_start\n"
             f"# blockConfig={json.dumps(cfg, separators=(',', ':'))}\n" + codes)
 
 
@@ -137,7 +228,21 @@ def element_overscan(e: Element) -> float:
     return 0.0 if d < 0.001 else d
 
 
-def _raster_moves(e: Element, pos, out, z_cb):
+def _travel(p, rot) -> str:
+    """Rapid move. On the rotary Studio writes X and U on separate lines (X first)."""
+    if rot:
+        return f"G0X{_c(p[0])}\nG0U{_c(rot.u(p[1]))}\n"
+    return f"G0X{_c(p[0])}Y{_c(p[1])}\n"
+
+
+def _cut(p, rot) -> str:
+    """Laser move, without S/F. On the rotary: G1U<u>X<x> (keys ["u","x"])."""
+    if rot:
+        return f"G1U{_c(rot.u(p[1]))}X{_c(p[0])}"
+    return f"G1X{_c(p[0])}Y{_c(p[1])}"
+
+
+def _raster_moves(e: Element, pos, out, z_cb, rot=None):
     """Raster block in Studio's format (checked against a P2S photo job fetched from the laser):
 
         G1F<feed>S0                 once per block
@@ -162,18 +267,18 @@ def _raster_moves(e: Element, pos, out, z_cb):
             x_first, x_last = seq[0][0], seq[-1][1]
             x_in, x_out = x_first - sign * over, x_last + sign * over
             if first:
-                out.append(f"G0X{_c(x_in)}Y{_c(y)}\n")
+                out.append(_travel((x_in, y), rot))
                 z_cb()
                 first = False
             elif e.scan == "zMode":
-                out.append(f"G1Y{_c(y)}\n")
+                out.append(f"G1U{_c(rot.u(y))}\n" if rot else f"G1Y{_c(y)}\n")
                 # only back up for the run-up if the last run-out didn't already go past it
                 if (pos[0] - x_in) * sign > 1e-9:
                     out.append(f"G1X{_c(x_in)}\n")
                 else:
                     x_in = pos[0]
             else:                               # one-way: travel back to the left with the laser off
-                out.append(f"G0X{_c(x_in)}Y{_c(y)}\n")
+                out.append(_travel((x_in, y), rot))
             if abs(x_in - x_first) > 1e-9:
                 out.append(f"G1X{_c(x_first)}\n")
             cur = x_first
@@ -191,14 +296,20 @@ def _raster_moves(e: Element, pos, out, z_cb):
 def generate(job: Job) -> str:
     if not job.elements:
         raise ValueError("nothing to process")
+    rot = rotary_of(job)
     out = [file_header(job), head(job, job.elements[-1])]
-    pos = (0.0, 0.0)
+    # Studio's planner starts from its canvas origin. On the flat bed that's machine (0, 0);
+    # on the rotary canvas it is X = 50 and, in this app's view, y = 250 (found from the
+    # first start point Studio picked in a real rotary job).
+    pos = (float(CYL_X_MIN), 250.0 + rot.ref_y - rot.axis_y) if rot else (0.0, 0.0)
     z_set = False
 
     def set_z(p):
         nonlocal z_set
         if not z_set and job.focal_len is not None:
-            out.append(f"G0Z{job.focal_len:.3f}\nG0X{_c(p[0])}Y{_c(p[1])}\n")
+            # flat-bed exports write 3 decimals (G0Z15.500); the rotary job had G0Z17
+            z = _c(job.focal_len) if rot else f"{job.focal_len:.3f}"
+            out.append(f"G0Z{z}\n" + _travel(p, rot))
             z_set = True
 
     def raster_z():
@@ -209,20 +320,19 @@ def generate(job: Job) -> str:
             z_set = True
 
     for i, e in enumerate(job.elements):
-        out.append(element_head(e, job.mode))
+        out.append(element_head(e, job.mode, rot.axis_y if rot else None))
         if e.is_raster:
-            pos = _raster_moves(e, pos, out, raster_z)
+            pos = _raster_moves(e, pos, out, raster_z, rot)
         else:
             s, f = _num(e.power * 10), _num(e.speed * 60)
             for _ in range(max(1, e.passes)):
                 for raw in e.paths:
                     path = _start_nearest(raw, pos)
-                    x0, y0 = path[0]
-                    out.append(f"G0X{_c(x0)}Y{_c(y0)}\n")
+                    out.append(_travel(path[0], rot))
                     set_z(path[0])
                     first = True
-                    for x, y in path[1:]:
-                        out.append(f"G1X{_c(x)}Y{_c(y)}" + (f"S{s}F{f}" if first else "") + "\n")
+                    for p in path[1:]:
+                        out.append(_cut(p, rot) + (f"S{s}F{f}" if first else "") + "\n")
                         first = False
                     pos = path[-1]
         nxt = job.elements[i + 1] if i + 1 < len(job.elements) else None
@@ -234,13 +344,39 @@ def generate(job: Job) -> str:
 
 
 def check_bounds(job: Job, width: float = BED_W, height: float = BED_H) -> None:
+    rot = rotary_of(job)
+    if rot:
+        _check_rotary(job, rot)
     for e in job.elements:
         if not 0 < e.power <= 100:
             raise ValueError(f"{e.shape}: power {e.power}% out of range")
         if not 0 < e.speed <= 1000:
             raise ValueError(f"{e.shape}: speed {e.speed} mm/s out of range")
+        if rot:
+            continue
         pts = [p for path in e.paths for p in path]
         pts += [(x, y) for y, runs in e.rows for a, b, _ in runs for x in (a, b)]
         for x, y in pts:
             if not (-1e-6 <= x <= width + 1e-6 and -1e-6 <= y <= height + 1e-6):
                 raise ValueError(f"{e.shape} {e.id} goes outside the {width}x{height} mm bed at ({x:.1f}, {y:.1f})")
+
+
+def _check_rotary(job: Job, rot: Rotary) -> None:
+    if not 0 <= rot.axis_y <= BED_H:
+        raise ValueError(f"rotary line Y {rot.axis_y:.1f} mm is off the bed")
+    ys = []
+    for e in job.elements:
+        pts = [p for path in e.paths for p in path]
+        pts += [(x, y) for y, runs in e.rows for a, b, _ in runs for x in (a, b)]
+        for x, y in pts:
+            if not CYL_X_MIN - 1e-6 <= x <= CYL_X_MAX + 1e-6:
+                raise ValueError(f"{e.shape} {e.id} is outside the rotary's working length "
+                                 f"(X {CYL_X_MIN}-{CYL_X_MAX} mm) at X {x:.1f}")
+            if rot.align == "edge" and y > rot.axis_y + 1e-6:
+                raise ValueError(f"{e.shape} {e.id} reaches below the rotary line (Y {rot.axis_y:g} mm); "
+                                 "move it onto the line or above it")
+            ys.append(y)
+    circ = rot.circumference
+    if circ and ys and max(ys) - min(ys) > circ + 1e-6:
+        raise ValueError(f"the design is {max(ys) - min(ys):.1f} mm tall but the object's "
+                         f"circumference is only {circ:.1f} mm, so it would overlap itself")

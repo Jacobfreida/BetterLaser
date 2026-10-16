@@ -40,6 +40,9 @@ class Job:
     fan_gear: int | None
     purifier_gear: int | None
     elements: list[Element]
+    # rotary attachment (LASER_CYLINDER mode), None on the flat bed:
+    # {"model": "ra2", "type": "roller" | "chuck", "diameter": mm, "axis_y": mm}
+    rotary: dict | None = None
 
 
 def _params(entry: dict, ptype: str) -> dict:
@@ -54,6 +57,9 @@ def load(path: str, seg: float = 0.1) -> Job:
     canvas = next(c for c in doc["canvas"] if c["id"] == canvas_id)
     dev = dict(doc["device"]["data"]["value"])[canvas_id]
     mode = dev["mode"]
+    if mode not in ("HONEYCOMB_PANEL", "LASER_PLANE"):
+        raise NotImplementedError(f"{mode} projects can't be converted directly yet; "
+                                  "import them in the app (rotary projects are supported there)")
     job_cfg = dev["data"].get(mode, {})
     # Per-device settings are the ones Studio actually sends.
     dev_displays = dict(dev["displays"]["value"])
