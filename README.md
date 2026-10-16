@@ -21,7 +21,8 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
   slide it round; it follows the shape when you move or resize it. Set the shape to *Off* to
   use it only as a guide. Move, resize, rotate; Ctrl+Z undo; Ctrl+D duplicate.
 - **Per-object laser settings:** Score, Cut, Fill, Image or Off, with power, speed, passes,
-  air assist, and lines per cm for fill/pictures. Cuts always run last.
+  air assist, and lines per cm for fill/pictures. Jobs always run pictures, then fills, then
+  scores, then cuts; smaller cuts (holes) go before the outlines around them.
 - **Pictures:** grayscale (power follows the shade between min and max power) or dithering
   (Jarvis, Floyd–Steinberg, Stucki, Atkinson, Sierra, Bayer, threshold), plus brightness,
   contrast, gamma and invert. The preview shows the exact pixels that get engraved.

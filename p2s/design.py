@@ -224,7 +224,10 @@ def build_job(design: dict) -> Job:
     objs = [o for o in design.get("objects", []) if (o.get("op") or {}).get("mode", "off") != "off"]
     if not objs:
         raise DesignError("Nothing to engrave: every object is set to Off.")
-    objs.sort(key=lambda o: ORDER.get(o["op"]["mode"], 9))
+    # engrave first, cut last; among cuts the smallest go first, so holes inside a part are
+    # cut before its outline frees it (Python's sort is stable: drawing order breaks ties)
+    objs.sort(key=lambda o: (ORDER.get(o["op"]["mode"], 9),
+                             abs(float(o.get("w", 0)) * float(o.get("h", 0))) if o["op"]["mode"] == "cut" else 0))
     by_id = {str(o.get("id")): o for o in design.get("objects", [])}
     elements = []
     for o in objs:

@@ -76,5 +76,18 @@ line = {"id": "l", "type": "path", "shape": {"kind": "line"}, "x": 10, "y": 10, 
         "paths": [[[0, 0], [50, 0.01]]], "op": {"mode": "score", "power": 10, "speed": 100}}
 g = gcode.generate(design.build_job({"focal": 10, "objects": [line]})).splitlines()
 assert [l for l in g if l.startswith(("G0X", "G1X"))] == ["G0X10Y10", "G0X10Y10", "G1X60Y10.01S100F6000"], g
+# 9. job order: pictures, fills, scores, then cuts; inner (smaller) cuts before the outline
+px1 = base64.b64encode(bytes([0, 0])).decode()
+mixed = {"focal": 10, "objects": [
+    {"id": "outline", "type": "rect", "x": 10, "y": 10, "w": 100, "h": 80, "op": {"mode": "cut", "power": 80, "speed": 15}},
+    {"id": "label", "type": "rect", "x": 20, "y": 20, "w": 30, "h": 10, "op": {"mode": "score", "power": 10, "speed": 100}},
+    {"id": "hole", "type": "ellipse", "x": 70, "y": 40, "w": 10, "h": 10, "op": {"mode": "cut", "power": 80, "speed": 15}},
+    {"id": "logo", "type": "image", "x": 20, "y": 50, "w": 2, "h": 1, "image": {"cols": 2, "rows": 1, "data": px1},
+     "op": {"mode": "image", "power": 30, "speed": 200, "density": 100}},
+    {"id": "band", "type": "rect", "x": 20, "y": 35, "w": 30, "h": 5, "op": {"mode": "fill", "power": 20, "speed": 200}}]}
+assert [e.id for e in design.build_job(mixed).elements] == ["logo", "band", "label", "hole", "outline"]
+g = gcode.generate(design.build_job(mixed)).splitlines()
+kinds = [l for l in g if l.startswith("M2519")]
+assert kinds == ["M2519S2T0", "M2519S4T0", "M2519S1T0", "M2519S3T0", "M2519S3T0"], kinds
 print("design checks passed: fill, nonzero holes/overlaps, rotation, text box, image power, job order, "
       "text wrapped round shapes, lines")
