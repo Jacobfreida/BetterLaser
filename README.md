@@ -28,7 +28,8 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Camera:** takes a photo with the lid camera and straightens it onto the bed using the
   machine's own calibration, corrected for material height.
 - **Measure:** click a spot and the head's IR sensor measures the material; focus Z is set
-  automatically (Z = 25 − distance).
+  automatically (Z = 25 − distance). *Show the spot* first takes a head-camera photo with the
+  red measuring laser on, circles the dot, and lets you nudge it onto your part before measuring.
 - **Rotary (RA2, 4-pin port):** tick *Rotary attachment* in the Job panel, choose rollers or
   chuck, enter the object's diameter and click *Set on bed* on the object's top line (the laser
   line). By default the **centre** of the design is engraved on the top of the object and half of

@@ -131,6 +131,9 @@ The per-machine process settings that are actually used are in `device.data.valu
 3. `PUT /v1/peripheral/param {type:ir_measure_distance} {action:"get_distance", type:"single"}`
    returns `{coord_x, coord_y, distance}`.
 4. IR off, lights idx 2 and 3 to 255, head home `go_to x0 y0`.
+The `ir_led` index 1 is the head's visible red measuring laser. The head camera is stream `"1"` of
+`/v1/camera/image` (Studio `captureLocalImage`; stream `"0"` is the lid camera), so the app can photograph
+the red dot before measuring to show where the reading is taken.
 In honeycomb mode, focus Z = 25 − distance. Valid range −50…25.
 
 ## Camera

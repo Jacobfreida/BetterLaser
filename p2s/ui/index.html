@@ -945,10 +945,12 @@ async function doMeasure(x, y){
   if (!status.connected){ toast("Connect to the laser first.", true); setTool("select"); return; }
   measureMark = {x, y}; render();
   const sh = settings.ir_shift_x ?? "";
-  const go = await dialog("Measure here?", `<p>The head moves so its height sensor (to the right of the laser) sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home. The laser itself ends up to the left of the spot.</p><p>Keep hands clear of the head.</p>
-    <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Sensor lands off the spot?</summary>
-    <p class="muted">Leave blank for automatic. If the sensor still reads to the right of where you clicked, raise this by that many mm; if it reads to the left, lower it.</p>
-    <label class="f">Extra shift left (mm)<input id="irShift" type="number" step="0.5" value="${sh}" placeholder="automatic"></label></details>`, [["Cancel", false], ["Measure", true, "primary"]]);
+  const go = await dialog("Measure here?", `<p>The head moves so its height sensor (to the right of the laser) sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home. The laser itself ends up to the left of the spot.</p>
+    <p><b>Show the spot</b> first to see a head-camera photo of the red measuring laser on your material, and nudge it if it's off the part.</p><p>Keep hands clear of the head.</p>
+    <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Sensor always lands off the spot?</summary>
+    <p class="muted">Leave blank for automatic (50 mm). If the sensor reads to the right of where you click, raise this by that many mm; if it reads to the left, lower it.</p>
+    <label class="f">Extra shift left (mm)<input id="irShift" type="number" step="0.5" value="${sh}" placeholder="automatic"></label></details>`,
+    [["Cancel", false], ["Show the spot", "spot"], ["Measure", true, "primary"]]);
   const shv = (document.getElementById("irShift") || {}).value;
   if (go && shv !== undefined && String(shv) !== String(sh)){
     settings.ir_shift_x = shv === "" ? null : +shv;
@@ -956,6 +958,7 @@ async function doMeasure(x, y){
   }
   setTool("select");
   if (!go){ measureMark = null; render(); return; }
+  if (go === "spot"){ const p = await showSpot(x, y); if (!p){ measureMark = null; render(); return; } x = p.x; y = p.y; }
   try {
     toast("Measuring…");
     const r = await api("/api/measure", {x, y});
@@ -963,6 +966,62 @@ async function doMeasure(x, y){
     else { F("focal").value = r.focal; D.focal = r.focal; autosave(); toast(`Distance ${r.distance.toFixed(2)} mm, so focus Z is ${r.focal} mm.`); if (cam.raw) dewarpCamera(); }
   } catch(e){ toast(e.message, true); }
   measureMark = null; render(); estimate();
+}
+
+// Head-camera check: park the sensor over the spot with the red measuring laser on and
+// show the photo, so the user can see where the reading will come from. Arrows nudge
+// the spot on the bed and take a new photo. Returns the final {x, y}, or null if cancelled.
+async function showSpot(x, y){
+  const dlg = $("#dlg"), wide = dlg.style.maxWidth;
+  dlg.style.maxWidth = "760px";
+  try {
+    for (;;){
+      measureMark = {x, y}; render();
+      toast("Moving the head and taking a photo…");
+      let r;
+      try { r = await api("/api/measure_preview", {x, y}); }
+      catch(e){ toast(e.message, true); return null; }
+      const url = "data:image/jpeg;base64," + r.jpeg;
+      window._nudge = null;
+      const nb = (dx, dy, label, title) => `<button class="btn small" title="${title}" onclick="window._nudge=[${dx},${dy}];document.getElementById('dlg').close('nudge')">${label}</button>`;
+      const pending = dialog("Is the red dot on your part?", `<div style="position:relative"><img id="spotImg" src="${url}" alt="Head camera photo with the measuring laser on" style="width:100%;border-radius:4px;display:block"><canvas id="spotMark" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas></div>
+        <p class="muted" id="spotNote">Looking for the red dot…</p>
+        <div class="row" style="flex-wrap:wrap"><span class="muted">Nudge the spot on the bed (5 mm):</span>${nb(-5,0,"← Left","Move the spot 5 mm left")}${nb(5,0,"Right →","Move the spot 5 mm right")}${nb(0,-5,"↑ Back","Move the spot 5 mm toward the back")}${nb(0,5,"Front ↓","Move the spot 5 mm toward the front")}</div>
+        <p class="muted">Spot at ${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm on the bed.</p>`,
+        [["Cancel", false], ["Measure here", true, "primary"]]);
+      markRedDot();
+      const ans = await pending;
+      if (window._nudge){ x += window._nudge[0]; y += window._nudge[1]; continue; }
+      if (ans) return {x, y};
+      api("/api/measure_cancel", {}).catch(() => {});
+      return null;
+    }
+  } finally { dlg.style.maxWidth = wide; }
+}
+
+// Find the measuring laser in the photo: the brightest strongly red blob.
+function markRedDot(){
+  const img = document.getElementById("spotImg"), cv = document.getElementById("spotMark"), note = document.getElementById("spotNote");
+  if (!img) return;
+  const run = () => {
+    const W = 480, H = Math.round(W * img.naturalHeight / Math.max(1, img.naturalWidth));
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const g = c.getContext("2d"); g.drawImage(img, 0, 0, W, H);
+    const d = g.getImageData(0, 0, W, H).data;
+    let best = 0, bx = 0, by = 0;
+    const score = new Float32Array(W * H);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++){ const r = d[i], gg = d[i + 1], b = d[i + 2], v = r - Math.max(gg, b); score[p] = r > 120 && v > 60 ? v + r * 0.3 : 0; if (score[p] > best){ best = score[p]; bx = p % W; by = (p / W) | 0; } }
+    cv.width = W; cv.height = H;
+    if (!best){ note.textContent = "Couldn't pick out the red dot automatically; look for it in the photo."; return; }
+    // centroid of strong red pixels near the brightest one
+    let sx = 0, sy = 0, n = 0;
+    for (let yy = Math.max(0, by - 30); yy < Math.min(H, by + 30); yy++) for (let xx = Math.max(0, bx - 30); xx < Math.min(W, bx + 30); xx++){ const v = score[yy * W + xx]; if (v > best * 0.6){ sx += xx * v; sy += yy * v; n += v; } }
+    const cx = sx / n, cy = sy / n, k = cv.getContext("2d");
+    k.strokeStyle = "#F2B400"; k.lineWidth = 3; k.beginPath(); k.arc(cx, cy, 14, 0, Math.PI * 2); k.stroke();
+    k.beginPath(); k.moveTo(cx - 24, cy); k.lineTo(cx - 16, cy); k.moveTo(cx + 16, cy); k.lineTo(cx + 24, cy); k.moveTo(cx, cy - 24); k.lineTo(cx, cy - 16); k.moveTo(cx, cy + 16); k.lineTo(cx, cy + 24); k.stroke();
+    note.textContent = "The circle marks the red measuring laser. The reading is taken where it lands.";
+  };
+  if (img.complete && img.naturalWidth) run(); else img.onload = run;
 }
 
 // ---------------------------------------------------------------- camera

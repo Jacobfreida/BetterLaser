@@ -127,6 +127,53 @@ class Machine:
             pass
         return IR_OFFSET_X_DEFAULT
 
+    def _sensor_head_x(self, x: float, y: float, shift):
+        """Head X that puts the height sensor over bed point x, and the extra shift used."""
+        off = self.ir_offset_x()
+        extra = IR_EXTRA_SHIFT if shift is None else float(shift)
+        hx = x - off - extra
+        if hx < -off or hx > 600 or y < 0 or y > 308:
+            raise DeviceError(f"Can't measure there: the height sensor sits to the right of the laser, "
+                              f"so it can't reach the first {extra:.0f} mm of the bed. Pick a point at least "
+                              f"{extra:.0f} mm from the left edge.")
+        return hx, extra
+
+    @staticmethod
+    def _restore(d):
+        """Measuring LED off, lights back on, head home (Studio's clean-up after measuring)."""
+        for args in ((("/v1/peripheral/param", "PUT"), {"params": {"type": "ir_led"}, "data": {"action": "off", "index": 1}}),
+                     (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 2, "value": 255}}),
+                     (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 3, "value": 255}}),
+                     (("/v1/laser-head/control", "POST"), {"data": {"action": "go_to", "waitTime": 0, "f": HEAD_FEED, "x": 0, "y": 0}})):
+            try:
+                d.request(*args[0], **args[1])
+            except Exception:
+                pass
+
+    def measure_preview(self, x: float, y: float, shift: float | None = None) -> dict:
+        """Move the sensor over (x, y), switch on the head's red measuring laser and photograph
+        it with the head camera (stream "1", Studio's captureLocalImage), so the user can see
+        exactly where the measurement will be taken. The head stays there with the laser on
+        until measure() or measure_cancel()."""
+        with self.lock:
+            d = self.need()
+            hx, extra = self._sensor_head_x(x, y, shift)
+            try:
+                d.request("/v1/laser-head/control", "POST", timeout=35,
+                          data={"action": "go_to", "waitTime": 30000, "f": HEAD_FEED, "x": hx, "y": y})
+                d.request("/v1/peripheral/param", "PUT", params={"type": "ir_led"}, data={"action": "on", "index": 1})
+                time.sleep(0.4)
+                jpg = d.camera_snapshot("1")
+            except Exception:
+                self._restore(d)
+                raise
+            return {"jpeg": base64.b64encode(jpg).decode(), "head_x": hx, "head_y": y, "shift": extra}
+
+    def measure_cancel(self) -> dict:
+        with self.lock:
+            self._restore(self.need())
+        return {"ok": True}
+
     def measure(self, x: float, y: float, shift: float | None = None) -> dict:
         """Measure the material height at bed point (x, y) with the head's IR sensor.
 
@@ -137,13 +184,7 @@ class Machine:
         """
         with self.lock:
             d = self.need()
-            off = self.ir_offset_x()
-            extra = IR_EXTRA_SHIFT if shift is None else float(shift)
-            hx = x - off - extra         # put the IR sensor (not the laser) over the clicked point
-            if hx < -off or hx > 600 or y < 0 or y > 308:
-                raise DeviceError(f"Can't measure there: the height sensor sits to the right of the laser, "
-                                  f"so it can't reach the first {extra:.0f} mm of the bed. Pick a point at least "
-                                  f"{extra:.0f} mm from the left edge.")
+            hx, extra = self._sensor_head_x(x, y, shift)
             try:
                 d.request("/v1/laser-head/control", "POST", timeout=35,
                           data={"action": "go_to", "waitTime": 30000, "f": HEAD_FEED, "x": hx, "y": y})
@@ -154,14 +195,7 @@ class Machine:
                 r = d.request("/v1/peripheral/param", "PUT", params={"type": "ir_measure_distance"},
                               data={"action": "get_distance", "type": "single"}, timeout=20) or {}
             finally:
-                for args in ((("/v1/peripheral/param", "PUT"), {"params": {"type": "ir_led"}, "data": {"action": "off", "index": 1}}),
-                             (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 2, "value": 255}}),
-                             (("/v1/peripheral/param", "PUT"), {"params": {"type": "fill_light"}, "data": {"action": "set_bri", "idx": 3, "value": 255}}),
-                             (("/v1/laser-head/control", "POST"), {"data": {"action": "go_to", "waitTime": 0, "f": HEAD_FEED, "x": 0, "y": 0}})):
-                    try:
-                        d.request(*args[0], **args[1])
-                    except Exception:
-                        pass
+                self._restore(d)
             dist = r.get("distance")
             if dist is None:
                 raise DeviceError(f"The machine didn't return a distance: {r}")
@@ -341,6 +375,12 @@ class Handler(BaseHTTPRequestHandler):
                 with MACHINE.lock:
                     data = MACHINE.need().request("/v1/file/content", params={"type": b.get("name", "global_calib.json")}, timeout=20)
                 return self._json({"data": data})
+            if p in ("/api/measure_preview", "/api/measure_cancel"):
+                if p.endswith("cancel"):
+                    return self._json(MACHINE.measure_cancel())
+                shift = b.get("shift", load_settings().get("ir_shift_x"))
+                return self._json(MACHINE.measure_preview(float(b["x"]), float(b["y"]),
+                                                          None if shift in (None, "") else float(shift)))
             if p == "/api/measure":
                 shift = b.get("shift", load_settings().get("ir_shift_x"))
                 return self._json(MACHINE.measure(float(b["x"]), float(b["y"]),
