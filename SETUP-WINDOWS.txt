@@ -1,0 +1,56 @@
+p2s-tools on a Windows work computer (USB-C connection)
+======================================================
+
+The tool is plain Python with no extra packages. You only need Python itself,
+and you don't need admin rights for it.
+
+STEP 1 - Unzip
+  Right-click p2s-tools.zip > Extract All. Use a normal folder such as
+  Documents\p2s (not inside the zip, not a network drive).
+
+STEP 2 - Check for Python
+  Open the "p2s" folder in File Explorer, click the address bar, type  cmd  and
+  press Enter. A Command Prompt opens in that folder. Type:
+
+      p2s convert tests\fixtures\square_circle.xcs test.gcode
+
+  If it prints "Wrote test.gcode", Python is fine - skip to STEP 4.
+  If it says "Python was not found", do STEP 3.
+
+STEP 3 - Get Python (pick ONE, none need admin)
+  A) Portable, nothing installed (best if your PC is locked down):
+     - On python.org go to Downloads > Windows and get
+       "Windows embeddable package (64-bit)" for Python 3.12 or 3.13.
+     - Unzip it into a folder named  python  inside the p2s folder, so that
+       p2s\python\python.exe exists.
+     - p2s.bat finds it automatically.
+  B) Normal install for your user only:
+     - python.org installer, untick "Use admin privileges", tick "Add python.exe to PATH".
+  C) Microsoft Store: search "Python 3.12" and install.
+
+  If your company restricts software, ask IT first - running unapproved programs
+  can break workplace rules even when Windows allows it.
+
+STEP 4 - Connect by USB-C (no company network involved)
+  Over USB-C the P2S shows up on the PC as a private network adapter that
+  connects ONLY this PC and the laser. That's how xTool Studio talks to it over
+  USB too. The laser's address on that link is 172.25.3.1, and "usb" in the
+  commands below is a shortcut for it.
+
+  Quick check in PowerShell, with the laser on and plugged in:
+
+      Test-NetConnection 172.25.3.1 -Port 28900
+
+  "TcpTestSucceeded : True" means ready. If False: make sure xTool Studio can
+  see the laser over USB (that confirms the USB driver is installed), then
+  close Studio completely and try again.
+
+STEP 5 - Run
+  Close xTool Studio completely (also check the system tray), then in the
+  Command Prompt in the p2s folder:
+
+      p2s usb status
+      p2s usb probe
+      p2s usb send tests\fixtures\studio_square_circle.gcode
+
+  Paths with spaces need quotes:  p2s usb send "C:\Jobs\My Sign.xcs"
