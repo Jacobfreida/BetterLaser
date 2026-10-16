@@ -85,7 +85,7 @@ input[type=range]{width:100%}
 #job{margin-top:auto;background:#EEF1F3}
 #send{width:100%;padding:11px;font-size:15px;font-weight:600;background:var(--go);border-color:var(--go);color:#fff;border-radius:var(--radius);border:1px solid}
 #send:disabled{opacity:.5}
-#headSec summary{cursor:pointer;list-style-position:outside}
+#headPanel{position:absolute;left:10px;top:10px;width:300px;max-height:calc(100% - 20px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:0 6px 22px rgba(0,0,0,.28);z-index:3}
 .jogwrap{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;margin-top:10px;align-items:start}
 .jog{display:grid;grid-template-columns:repeat(3,38px);grid-template-rows:repeat(3,34px);gap:4px}
 .jog .btn{padding:0;font-size:16px}
@@ -132,6 +132,7 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   <button class="tool" id="importTool" title="Import SVG or xTool project (.xcs)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg></button>
   <hr>
   <button class="tool" id="cameraTool" title="Camera view of the bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h4l2-2h4l2 2h4v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+  <button class="tool" id="headTool" title="Laser head: jog, red pointer, show job start"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 5l-2 2M12 5l2 2M12 19l-2-2M12 19l2-2M5 12l2-2M5 12l2 2M19 12l-2-2M19 12l-2 2"/></svg></button>
   <button class="tool" data-tool="measure" title="Measure material height: click a spot on the bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/></svg></button>
 </nav>
 
@@ -143,6 +144,31 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
     <button class="btn small" id="camRefresh">Retake</button>
     <button class="btn small" id="camAlign" title="Fine-tune camera alignment">Align</button>
     <button class="btn small" id="camHide">Hide</button>
+  </div>
+  <div id="headPanel" class="hidden" role="dialog" aria-label="Laser head">
+    <div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:15px">Laser head <span class="muted" id="headPos" style="font-weight:400"></span></h2>
+      <button class="btn small" id="headClose" aria-label="Close" title="Close (the head stays where it is)">✕</button></div>
+      <div class="jogwrap">
+        <div class="jog" role="group" aria-label="Jog the laser head">
+          <span></span><button class="btn" data-jog="0,-1" title="Toward the back">↑</button><span></span>
+          <button class="btn" data-jog="-1,0" title="Left">←</button><button class="btn" id="headHome" title="Send the head home (0, 0)">⌂</button><button class="btn" data-jog="1,0" title="Right">→</button>
+          <span></span><button class="btn" data-jog="0,1" title="Toward the front">↓</button><span></span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+          <label class="f">Step (mm)<select id="jogStep"><option>0.5</option><option>1</option><option selected>5</option><option>10</option><option>50</option></select></label>
+          <label class="chk"><input type="checkbox" id="pointerOn"> Red pointer</label>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <button class="btn" id="headGoto" title="Then click the bed: the head moves there with the red pointer on">Move to a point</button>
+        <button class="btn" id="headStart" title="Park the red pointer where the job will start">Show job start</button>
+        <button class="btn" id="headFrame" style="grid-column:1/3" title="Run the red pointer round the area the job covers, then stop at the start">Trace job outline</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">The red pointer shines down the laser's own path, so it marks exactly where the laser will fire. Line your part up with it.</p>
+      <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Pointer lands off the spot you picked?</summary>
+        <p class="muted">Use <b>Move to a point</b> on a mark you can see, then enter how far the red dot landed from it (right and front are positive). The app corrects every head move by that much.</p>
+        <div class="grid2"><label class="f">Dot is right by (mm)<input id="ptrDx" type="number" step="0.5"></label><label class="f">Dot is toward the front by (mm)<input id="ptrDy" type="number" step="0.5"></label></div>
+      </details>
   </div>
   <div id="hint"></div>
   <div id="zoomctl"><button id="zIn" aria-label="Zoom in">+</button><button id="zOut" aria-label="Zoom out">−</button><button id="zFit" aria-label="Fit bed" title="Fit bed">⤢</button></div>
@@ -212,33 +238,6 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
         <option value="threshold">Black and white (threshold)</option></select></label>
       <label class="chk" id="bidirF" style="grid-column:1/3"><input type="checkbox" id="lbidir" checked> Engrave in both directions (faster)</label>
     </div>
-  </section>
-
-  <section id="headSec">
-    <details id="headBox">
-      <summary><h2 style="display:inline;margin:0">Laser head</h2> <span class="muted" id="headPos"></span></summary>
-      <div class="jogwrap">
-        <div class="jog" role="group" aria-label="Jog the laser head">
-          <span></span><button class="btn" data-jog="0,-1" title="Toward the back">↑</button><span></span>
-          <button class="btn" data-jog="-1,0" title="Left">←</button><button class="btn" id="headHome" title="Send the head home (0, 0)">⌂</button><button class="btn" data-jog="1,0" title="Right">→</button>
-          <span></span><button class="btn" data-jog="0,1" title="Toward the front">↓</button><span></span>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
-          <label class="f">Step (mm)<select id="jogStep"><option>0.5</option><option>1</option><option selected>5</option><option>10</option><option>50</option></select></label>
-          <label class="chk"><input type="checkbox" id="pointerOn"> Red pointer</label>
-        </div>
-      </div>
-      <div class="grid2" style="margin-top:10px">
-        <button class="btn" id="headGoto" title="Then click the bed: the head moves there with the red pointer on">Move to a point</button>
-        <button class="btn" id="headStart" title="Park the red pointer where the job will start">Show job start</button>
-        <button class="btn" id="headFrame" style="grid-column:1/3" title="Run the red pointer round the area the job covers, then stop at the start">Trace job outline</button>
-      </div>
-      <p class="muted" style="margin:8px 0 0">The red pointer shines down the laser's own path, so it marks exactly where the laser will fire. Line your part up with it.</p>
-      <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Pointer lands off the spot you picked?</summary>
-        <p class="muted">Use <b>Move to a point</b> on a mark you can see, then enter how far the red dot landed from it (right and front are positive). The app corrects every head move by that much.</p>
-        <div class="grid2"><label class="f">Dot is right by (mm)<input id="ptrDx" type="number" step="0.5"></label><label class="f">Dot is toward the front by (mm)<input id="ptrDy" type="number" step="0.5"></label></div>
-      </details>
-    </details>
   </section>
 
   <section id="job">
@@ -572,7 +571,7 @@ document.addEventListener("keydown", ev => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "d" && !typing && sel){ ev.preventDefault(); duplicate(); return; }
   if (typing) return;
   if ((ev.key === "Delete" || ev.key === "Backspace") && sel){ snapshot(); unwrapFor(sel); D.objects = D.objects.filter(o => o.id !== sel); sel = null; inspector(); render(); estimate(); return; }
-  if (ev.key === "Escape"){ sel = null; setTool("select"); inspector(); render(); return; }
+  if (ev.key === "Escape"){ sel = null; setTool("select"); showHeadPanel(false); inspector(); render(); return; }
   const arrows = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
   if (arrows[ev.key] && sel){ ev.preventDefault(); const o = obj(sel), s = ev.shiftKey ? 10 : 1; snapshot(); o.x = r3(o.x + arrows[ev.key][0] * s); o.y = r3(o.y + arrows[ev.key][1] * s); render(); inspectorValues(); return; }
   const keys = {v:"select", r:"rect", e:"ellipse", t:"text", l:"line", p:"shape"};
@@ -978,8 +977,14 @@ F("headFrame").onclick = async () => {
 for (const [id, key] of [["ptrDx", "pointer_dx"], ["ptrDy", "pointer_dy"]]){
   F(id).addEventListener("change", async () => { const v = parseFloat(F(id).value); settings[key] = isFinite(v) ? v : 0; await api("/api/settings", {[key]:settings[key]}).catch(() => {}); toast("Saved. Head moves now allow for it."); });
 }
-F("headBox").addEventListener("toggle", () => { F("ptrDx").value = settings.pointer_dx || ""; F("ptrDy").value = settings.pointer_dy || ""; });
-F("headBox").addEventListener("toggle", () => { if (F("headBox").open && status.connected) headCmd({action:"where"}, true); });
+function showHeadPanel(on){
+  F("headPanel").classList.toggle("hidden", !on); F("headTool").setAttribute("aria-pressed", on);
+  if (!on) return;
+  F("ptrDx").value = settings.pointer_dx || ""; F("ptrDy").value = settings.pointer_dy || "";
+  if (status.connected) headCmd({action:"where"}, true);
+}
+F("headTool").onclick = () => showHeadPanel(F("headPanel").classList.contains("hidden"));
+F("headClose").onclick = () => showHeadPanel(false);
 
 // ---------------------------------------------------------------- rotary attachment
 function rotaryUI(){
