@@ -13,8 +13,13 @@ The app only listens on this computer.
 Then click **Connect** (the address box says `usb` for the USB-C cable).
 
 ## What it does
-- **Shapes:** rectangles, ellipses, text from any installed TrueType font, imported SVG files,
-  and rectangles/circles from xTool .xcs projects. Move, resize, rotate; Ctrl+Z undo; Ctrl+D duplicate.
+- **Shapes:** rectangles, ellipses, lines (Shift snaps to 45°), polygons, stars, rounded
+  rectangles and hearts, text from any installed TrueType font, imported SVG files,
+  and rectangles/circles from xTool .xcs projects.
+- **Text around a shape:** pick *Wrap around* in the text panel to set text over the top of a
+  circle, ellipse, rectangle or any drawn shape (or inside, along the bottom). Drag the text to
+  slide it round; it follows the shape when you move or resize it. Set the shape to *Off* to
+  use it only as a guide. Move, resize, rotate; Ctrl+Z undo; Ctrl+D duplicate.
 - **Per-object laser settings:** Score, Cut, Fill, Image or Off, with power, speed, passes,
   air assist, and lines per cm for fill/pictures. Cuts always run last.
 - **Pictures:** grayscale (power follows the shade between min and max power) or dithering

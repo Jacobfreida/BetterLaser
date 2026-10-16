@@ -27,6 +27,9 @@ UI_FILE = os.path.join(HERE, "ui", "index.html")
 USB_HOST = "172.25.3.1" if sys.platform != "darwin" else "172.25.4.1"
 IR_OFFSET_X_DEFAULT = 68.0      # plugin Wit[RULE_TWO]: IR sensor sits 68 mm right of the laser
 HEAD_FEED = 9600                # plugin w7
+# Moving the head by laserMeasureOffset alone left the laser (not the sensor) over the spot;
+# on the user's P2S a further ~60 mm overshot a little, ~50 mm lands on target.
+IR_EXTRA_SHIFT = 50.0
 
 
 def settings_path() -> str:
@@ -129,13 +132,13 @@ class Machine:
 
         The sensor sits right of the laser. Subtracting the machine's laserMeasureOffset
         once (as we read Studio's code) left the LASER over the clicked point on a real
-        P2S, with the sensor about 60 mm to the right, so by default the head is moved
-        that far again. `shift` (settings: ir_shift_x) overrides that extra amount, in mm.
+        P2S, with the sensor about 60 mm to the right, so by default the head is moved a
+        further IR_EXTRA_SHIFT mm. `shift` (settings: ir_shift_x) overrides that amount, in mm.
         """
         with self.lock:
             d = self.need()
             off = self.ir_offset_x()
-            extra = off if shift is None else float(shift)
+            extra = IR_EXTRA_SHIFT if shift is None else float(shift)
             hx = x - off - extra         # put the IR sensor (not the laser) over the clicked point
             if hx < -off or hx > 600 or y < 0 or y > 308:
                 raise DeviceError(f"Can't measure there: the height sensor sits to the right of the laser, "
@@ -296,6 +299,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "info": info})
             if p == "/api/disconnect":
                 MACHINE.disconnect(); return self._json({"ok": True})
+            if p == "/api/text" and (b.get("wrap") or {}).get("target"):
+                # text wrapped round a shape: bed-mm outlines, returned in a box of their own
+                paths = design.wrap_text_paths(b, b["target_obj"])
+                xs = [x for q in paths for x, _ in q] or [0]; ys = [y for q in paths for _, y in q] or [0]
+                x0, y0 = min(xs), min(ys)
+                return self._json({"paths": [[[round(x - x0, 3), round(y - y0, 3)] for x, y in q] for q in paths],
+                                   "x": x0, "y": y0, "nat_w": max(max(xs) - x0, 1e-6), "nat_h": max(max(ys) - y0, 1e-6)})
             if p == "/api/text":
                 paths, w, h = design.text_geometry(b)
                 return self._json({"paths": [[[round(x, 3), round(y, 3)] for x, y in q] for q in paths],
