@@ -122,6 +122,10 @@ The per-machine process settings that are actually used are in `device.data.valu
 1. `POST /v1/laser-head/control {action:"go_to", waitTime:30000, f:9600, x, y}` with
    x = target − IR offset X. The offset comes from config `laserMeasureOffset` ("X64.5Y1.4Z136.7"
    on this machine; plugin default 68).
+   **On the real machine this left the laser over the target and the sensor ~60 mm to the right**,
+   so the app now subtracts the offset a second time (x = target − 2 × offset), adjustable with the
+   `ir_shift_x` setting. (Studio also adds half its 45 × 30 marker icon, `+22.5, +15`; how its click
+   point relates to the icon isn't known.)
 2. Fill light off `PUT /v1/peripheral/param {type:fill_light} {action:"set_bri", idx:0, value:0}`;
    IR LED on `{type:ir_led} {action:"on", index:1}`.
 3. `PUT /v1/peripheral/param {type:ir_measure_distance} {action:"get_distance", type:"single"}`

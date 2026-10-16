@@ -502,7 +502,7 @@ function duplicate(){ const o = obj(sel); if (!o) return; snapshot(); const c = 
 
 const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom · Delete removes · Ctrl+D duplicates",
   rect:"Drag on the bed to draw a rectangle (Shift for a square)", ellipse:"Drag on the bed to draw an ellipse (Shift for a circle)",
-  text:"Click on the bed where the text should go", measure:"Click the spot on the material to measure. The head will move there.",
+  text:"Click on the bed where the text should go", measure:"Click the spot on the material to measure. The head moves so its height sensor (right of the laser) is over it.",
   rotline:"Click the top line of the object (where the laser should touch it first)"};
 function setTool(t){ tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
@@ -806,7 +806,16 @@ $("#measureBtn").onclick = () => { if (!status.connected) return toast("Connect 
 async function doMeasure(x, y){
   if (!status.connected){ toast("Connect to the laser first.", true); setTool("select"); return; }
   measureMark = {x, y}; render();
-  const go = await dialog("Measure here?", `<p>The head moves so its height sensor sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home.</p><p>Keep hands clear of the head.</p>`, [["Cancel", false], ["Measure", true, "primary"]]);
+  const sh = settings.ir_shift_x ?? "";
+  const go = await dialog("Measure here?", `<p>The head moves so its height sensor (to the right of the laser) sits over this spot (${r3(x).toFixed(1)}, ${r3(y).toFixed(1)} mm), measures, then returns home. The laser itself ends up to the left of the spot.</p><p>Keep hands clear of the head.</p>
+    <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Sensor lands off the spot?</summary>
+    <p class="muted">Leave blank for automatic. If the sensor still reads to the right of where you clicked, raise this by that many mm; if it reads to the left, lower it.</p>
+    <label class="f">Extra shift left (mm)<input id="irShift" type="number" step="0.5" value="${sh}" placeholder="automatic"></label></details>`, [["Cancel", false], ["Measure", true, "primary"]]);
+  const shv = (document.getElementById("irShift") || {}).value;
+  if (go && shv !== undefined && String(shv) !== String(sh)){
+    settings.ir_shift_x = shv === "" ? null : +shv;
+    await api("/api/settings", {ir_shift_x:settings.ir_shift_x}).catch(() => {});
+  }
   setTool("select");
   if (!go){ measureMark = null; render(); return; }
   try {

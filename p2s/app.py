@@ -124,14 +124,23 @@ class Machine:
             pass
         return IR_OFFSET_X_DEFAULT
 
-    def measure(self, x: float, y: float) -> dict:
+    def measure(self, x: float, y: float, shift: float | None = None) -> dict:
+        """Measure the material height at bed point (x, y) with the head's IR sensor.
+
+        The sensor sits right of the laser. Subtracting the machine's laserMeasureOffset
+        once (as we read Studio's code) left the LASER over the clicked point on a real
+        P2S, with the sensor about 60 mm to the right, so by default the head is moved
+        that far again. `shift` (settings: ir_shift_x) overrides that extra amount, in mm.
+        """
         with self.lock:
             d = self.need()
             off = self.ir_offset_x()
-            hx = x - off                 # put the IR sensor (not the laser) over the clicked point
-            if hx < 0 or hx > 620 or y < 0 or y > 308:
-                raise DeviceError(f"Can't measure there: the sensor is {off:.0f} mm right of the laser head, "
-                                  f"so pick a point at least {off:.0f} mm from the left edge.")
+            extra = off if shift is None else float(shift)
+            hx = x - off - extra         # put the IR sensor (not the laser) over the clicked point
+            if hx < -off or hx > 600 or y < 0 or y > 308:
+                raise DeviceError(f"Can't measure there: the height sensor sits to the right of the laser, "
+                                  f"so it can't reach the first {extra:.0f} mm of the bed. Pick a point at least "
+                                  f"{extra:.0f} mm from the left edge.")
             try:
                 d.request("/v1/laser-head/control", "POST", timeout=35,
                           data={"action": "go_to", "waitTime": 30000, "f": HEAD_FEED, "x": hx, "y": y})
@@ -156,8 +165,9 @@ class Machine:
             dist = float(dist)
             focal = 25 - dist            # honeycomb mode: k7(...).value = 25 - z
             ok = -50 <= focal <= 25
-            return {"distance": dist, "focal": round(focal, 2), "ok": ok,
-                    "message": "" if ok else "Out of range: is there material under the sensor?"}
+            return {"distance": dist, "focal": round(focal, 2), "ok": ok, "head_x": hx, "head_y": y,
+                    "shift": extra, "sensor": {"x": r.get("coord_x"), "y": r.get("coord_y")},
+                    "message": "" if ok else "Nothing measured: is the material under the height sensor?"}
 
 
 MACHINE = Machine()
@@ -322,7 +332,9 @@ class Handler(BaseHTTPRequestHandler):
                     data = MACHINE.need().request("/v1/file/content", params={"type": b.get("name", "global_calib.json")}, timeout=20)
                 return self._json({"data": data})
             if p == "/api/measure":
-                return self._json(MACHINE.measure(float(b["x"]), float(b["y"])))
+                shift = b.get("shift", load_settings().get("ir_shift_x"))
+                return self._json(MACHINE.measure(float(b["x"]), float(b["y"]),
+                                                  None if shift in (None, "") else float(shift)))
             self._send(404, b"not found", "text/plain")
         except Exception as e:
             self._error(e)
