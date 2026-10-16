@@ -85,6 +85,10 @@ input[type=range]{width:100%}
 #job{margin-top:auto;background:#EEF1F3}
 #send{width:100%;padding:11px;font-size:15px;font-weight:600;background:var(--go);border-color:var(--go);color:#fff;border-radius:var(--radius);border:1px solid}
 #send:disabled{opacity:.5}
+#headSec summary{cursor:pointer;list-style-position:outside}
+.jogwrap{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;margin-top:10px;align-items:start}
+.jog{display:grid;grid-template-columns:repeat(3,38px);grid-template-rows:repeat(3,34px);gap:4px}
+.jog .btn{padding:0;font-size:16px}
 #rotBox{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--line)}
 .focusrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 #imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);background:#fff;max-height:150px;object-fit:contain}
@@ -208,6 +212,33 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
         <option value="threshold">Black and white (threshold)</option></select></label>
       <label class="chk" id="bidirF" style="grid-column:1/3"><input type="checkbox" id="lbidir" checked> Engrave in both directions (faster)</label>
     </div>
+  </section>
+
+  <section id="headSec">
+    <details id="headBox">
+      <summary><h2 style="display:inline;margin:0">Laser head</h2> <span class="muted" id="headPos"></span></summary>
+      <div class="jogwrap">
+        <div class="jog" role="group" aria-label="Jog the laser head">
+          <span></span><button class="btn" data-jog="0,-1" title="Toward the back">↑</button><span></span>
+          <button class="btn" data-jog="-1,0" title="Left">←</button><button class="btn" id="headHome" title="Send the head home (0, 0)">⌂</button><button class="btn" data-jog="1,0" title="Right">→</button>
+          <span></span><button class="btn" data-jog="0,1" title="Toward the front">↓</button><span></span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+          <label class="f">Step (mm)<select id="jogStep"><option>0.5</option><option>1</option><option selected>5</option><option>10</option><option>50</option></select></label>
+          <label class="chk"><input type="checkbox" id="pointerOn"> Red pointer</label>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <button class="btn" id="headGoto" title="Then click the bed: the head moves there with the red pointer on">Move to a point</button>
+        <button class="btn" id="headStart" title="Park the red pointer where the job will start">Show job start</button>
+        <button class="btn" id="headFrame" style="grid-column:1/3" title="Run the red pointer round the area the job covers, then stop at the start">Trace job outline</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">The red pointer shines down the laser's own path, so it marks exactly where the laser will fire. Line your part up with it.</p>
+      <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Pointer lands off the spot you picked?</summary>
+        <p class="muted">Use <b>Move to a point</b> on a mark you can see, then enter how far the red dot landed from it (right and front are positive). The app corrects every head move by that much.</p>
+        <div class="grid2"><label class="f">Dot is right by (mm)<input id="ptrDx" type="number" step="0.5"></label><label class="f">Dot is toward the front by (mm)<input id="ptrDy" type="number" step="0.5"></label></div>
+      </details>
+    </details>
   </section>
 
   <section id="job">
@@ -356,6 +387,11 @@ function render(){
   if (sel && obj(sel)) drawSelection(obj(sel));
   if (drag && drag.kind === "draw" && tool === "line") el("line", {x1:drag.x0, y1:drag.y0, x2:drag.x1, y2:drag.y1, stroke:"#fff", "stroke-width":px() * 1.5, "stroke-dasharray":`${px() * 4} ${px() * 3}`}, svg);
   else if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
+  if (head.known){
+    const k = px(), g = el("g", {"pointer-events":"none"}, svg), c = head.pointer ? "#FF3B30" : "#F2B400";
+    el("circle", {cx:head.x, cy:head.y, r:k * 6, fill:"none", stroke:c, "stroke-width":k * 2}, g);
+    el("path", {d:`M${head.x - k * 12} ${head.y}H${head.x - k * 3}M${head.x + k * 3} ${head.y}H${head.x + k * 12}M${head.x} ${head.y - k * 12}V${head.y - k * 3}M${head.x} ${head.y + k * 3}V${head.y + k * 12}`, stroke:c, "stroke-width":k * 1.6}, g);
+  }
   if (measureMark) el("circle", {cx:measureMark.x, cy:measureMark.y, r:px() * 7, fill:"none", stroke:"#E0A100", "stroke-width":px() * 2.5}, svg);
 }
 
@@ -449,11 +485,13 @@ function drawSelection(o){
 
 // ---------------------------------------------------------------- pointer interaction
 let drag = null, spaceDown = false, measureMark = null;
+let head = {known:false, x:0, y:0, pointer:false};
 svg.addEventListener("pointerdown", ev => {
   svg.setPointerCapture(ev.pointerId);
   const p = screenToMm(ev), handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
   if (ev.button === 1 || spaceDown){ drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}}; return; }
   if (tool === "measure"){ doMeasure(p.x, p.y); return; }
+  if (tool === "goto"){ setTool("select"); headCmd({action:"move", x:r3(p.x), y:r3(p.y), pointer:true}); return; }
   if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
   if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
   if (tool === "text"){ addText(p.x, p.y); setTool("select"); return; }
@@ -548,6 +586,7 @@ const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom
   rect:"Drag on the bed to draw a rectangle (Shift for a square)", ellipse:"Drag on the bed to draw an ellipse (Shift for a circle)",
   text:"Click on the bed where the text should go",
   line:"Drag to draw a line (Shift snaps to 45°)", shape:"Drag on the bed to draw a shape (Shift keeps it even). Change the shape on the right.", measure:"Click the spot on the material to measure. The head moves so its height sensor (right of the laser) is over it.",
+  goto:"Click where the head should go; the red pointer turns on there",
   rotline:"Click the top line of the object (where the laser should touch it first)"};
 function setTool(t){ tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
@@ -903,6 +942,44 @@ $("#send").onclick = async () => {
 };
 $("#pauseBtn").onclick = async () => { try { await api("/api/pause", {}); toast("Pause sent."); } catch(e){ toast(e.message, true); } };
 $("#stopBtn").onclick = async () => { try { await api("/api/stop", {}); toast("Stop sent."); } catch(e){ toast(e.message, true); } };
+
+// ---------------------------------------------------------------- laser head: jog, red pointer, job start
+async function headCmd(body, quiet){
+  if (!status.connected){ toast("Connect to the laser first.", true); return null; }
+  try {
+    const r = await api("/api/head", body);
+    if (r.x != null){ head.x = r.x; head.y = r.y; head.known = true; }
+    if (body.pointer === true || body.action === "start" || body.action === "frame") head.pointer = true;
+    if (body.action === "home") head.pointer = false;
+    if (body.action === "pointer") head.pointer = !!body.on;
+    F("pointerOn").checked = head.pointer;
+    $("#headPos").textContent = head.known ? `at ${head.x.toFixed(1)}, ${head.y.toFixed(1)} mm` : "";
+    render(); return r;
+  } catch(e){ if (!quiet) toast(e.message, true); return null; }
+}
+for (const b of document.querySelectorAll("[data-jog]")) b.onclick = () => {
+  const [sx, sy] = b.dataset.jog.split(",").map(Number), st = +F("jogStep").value;
+  headCmd({action:"move", dx:sx * st, dy:sy * st});
+};
+F("headHome").onclick = () => headCmd({action:"home"});
+F("pointerOn").onchange = () => headCmd({action:"pointer", on:F("pointerOn").checked});
+F("headGoto").onclick = () => { if (!status.connected) return toast("Connect to the laser first.", true); setTool("goto"); };
+F("headStart").onclick = async () => {
+  let d; try { d = payload(); } catch(e){ return toast(e.message, true); }
+  const r = await headCmd({action:"start", design:d});
+  if (r) toast(`Red pointer is at the job's start: ${r.start[0].toFixed(1)}, ${r.start[1].toFixed(1)} mm.` + (r.rotary ? " On the rotary this is where the head sits over the object's top line." : ""));
+};
+F("headFrame").onclick = async () => {
+  let d; try { d = payload(); } catch(e){ return toast(e.message, true); }
+  toast("Tracing the job outline with the red pointer…");
+  const r = await headCmd({action:"frame", design:d});
+  if (r) toast("Done: the pointer is parked at the job's start.");
+};
+for (const [id, key] of [["ptrDx", "pointer_dx"], ["ptrDy", "pointer_dy"]]){
+  F(id).addEventListener("change", async () => { const v = parseFloat(F(id).value); settings[key] = isFinite(v) ? v : 0; await api("/api/settings", {[key]:settings[key]}).catch(() => {}); toast("Saved. Head moves now allow for it."); });
+}
+F("headBox").addEventListener("toggle", () => { F("ptrDx").value = settings.pointer_dx || ""; F("ptrDy").value = settings.pointer_dy || ""; });
+F("headBox").addEventListener("toggle", () => { if (F("headBox").open && status.connected) headCmd({action:"where"}, true); });
 
 // ---------------------------------------------------------------- rotary attachment
 function rotaryUI(){

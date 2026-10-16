@@ -165,3 +165,12 @@ Checked against a roller job Studio sent to the laser (fetched back with `p2s us
 - This app's default "centre" alignment is not a Studio feature: it only changes the U origin
   (U = s·(y − design centre)), so the design's middle is at U = 0 when the job starts; the
   machine sees ordinary negative and positive U moves, as in Studio's own jobs.
+
+## Moving the head and the red pointer
+- Move: `POST /v1/laser-head/control {action:"go_to", waitTime:30000, f:9600, x, y}`; position:
+  `{action:"get_coord", waitTime:0}`. Studio's optics test also jogs with `POST /v1/cnc/cmd`
+  `params:{cmd:"G91 X<dx> Y<dy> F9600"}` (raw G-code).
+- Red pointer down the beam path ("coaxial"): `PUT /v1/peripheral/param` `params:{type:"coaxial_Ir"}`
+  `data:{action:"on"|"off"}`. (The measuring dot is a different light: `ir_led` index 1.)
+- Unconfirmed whether `go_to` x/y is exactly where the beam lands; the app has an optional
+  correction (`pointer_dx` / `pointer_dy` settings).

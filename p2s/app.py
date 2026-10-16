@@ -11,6 +11,7 @@ import json
 import math
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -30,6 +31,7 @@ HEAD_FEED = 9600                # plugin w7
 # Moving the head by laserMeasureOffset alone left the laser (not the sensor) over the spot;
 # on the user's P2S a further ~60 mm overshot a little, ~50 mm lands on target.
 IR_EXTRA_SHIFT = 50.0
+BED_MAX_X, BED_MAX_Y = 600.0, 305.0
 
 
 def settings_path() -> str:
@@ -169,6 +171,74 @@ class Machine:
                 raise
             return {"jpeg": base64.b64encode(jpg).decode(), "head_x": hx, "head_y": y, "shift": extra}
 
+    # -- moving the head and the red pointer ------------------------------------
+    # Studio: setLaserHead / getLaserPosition (/v1/laser-head/control go_to / get_coord) and
+    # turnOnCoaxialIr / turnOffCoaxialIr (PUT /v1/peripheral/param type coaxial_Ir): a red
+    # dot that shines down the beam path, so it marks exactly where the laser would fire.
+    head_pos = (0.0, 0.0)
+
+    def _need_idle(self, d):
+        mode = ((d.status() or {}).get("curMode") or {}).get("mode")
+        if mode not in (None, "P_IDLE", "P_SLEEP", "P_WORK_DONE"):
+            raise DeviceError(f"The laser is busy ({mode}); the head can only be moved when it's idle.")
+
+    @staticmethod
+    def _pointer_fix():
+        """Optional correction (settings pointer_dx / pointer_dy, mm) if the red dot lands away
+        from where it was sent. Not needed if go_to coordinates match the bed (unconfirmed)."""
+        st = load_settings()
+        return float(st.get("pointer_dx") or 0), float(st.get("pointer_dy") or 0)
+
+    def _go(self, d, x, y, wait=True):
+        x = min(BED_MAX_X, max(0.0, float(x))); y = min(BED_MAX_Y, max(0.0, float(y)))
+        fx, fy = self._pointer_fix()
+        d.request("/v1/laser-head/control", "POST", timeout=35,
+                  data={"action": "go_to", "waitTime": 30000 if wait else 0, "f": HEAD_FEED, "x": x - fx, "y": y - fy})
+        self.head_pos = (x, y)
+        return x, y
+
+    def pointer(self, on: bool) -> dict:
+        with self.lock:
+            self.need().request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"},
+                                data={"action": "on" if on else "off"})
+        return {"ok": True, "pointer": on}
+
+    def where(self) -> dict:
+        with self.lock:
+            d = self.need()
+            try:
+                r = d.request("/v1/laser-head/control", "POST", data={"action": "get_coord", "waitTime": 0}, timeout=10) or {}
+                if r.get("x") is not None:
+                    fx, fy = self._pointer_fix()
+                    self.head_pos = (float(r["x"]) + fx, float(r["y"]) + fy)
+            except Exception:
+                pass
+        return {"x": self.head_pos[0], "y": self.head_pos[1]}
+
+    def move(self, x=None, y=None, dx=0.0, dy=0.0, pointer=None) -> dict:
+        """Move the head to (x, y), or by (dx, dy) from where it is. Kept on the bed."""
+        if x is None or y is None:
+            cur = self.where()
+            x, y = cur["x"] + float(dx), cur["y"] + float(dy)
+        with self.lock:
+            d = self.need()
+            self._need_idle(d)
+            if pointer is not None:
+                d.request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"},
+                          data={"action": "on" if pointer else "off"})
+            x, y = self._go(d, x, y)
+        return {"x": x, "y": y}
+
+    def trace(self, points) -> dict:
+        """Run the red pointer through a list of points (e.g. a job's outline), then stay at the last."""
+        with self.lock:
+            d = self.need()
+            self._need_idle(d)
+            d.request("/v1/peripheral/param", "PUT", params={"type": "coaxial_Ir"}, data={"action": "on"})
+            for px, py in points:
+                self._go(d, px, py)
+        return {"x": self.head_pos[0], "y": self.head_pos[1]}
+
     def measure_cancel(self) -> dict:
         with self.lock:
             self._restore(self.need())
@@ -208,6 +278,35 @@ class Machine:
 
 
 MACHINE = Machine()
+
+
+def job_start_and_outline(design_json: dict):
+    """Where the laser first fires in a job, and the corners of the area it covers (bed mm).
+
+    The start is the first travel move of the G-code we would send. On the rotary the head
+    stays on the rotary line (Y) and the object turns, so the outline is just the X span.
+    """
+    job = design.build_job(design_json)
+    gcode.check_bounds(job)
+    text = gcode.generate(job)
+    rot = gcode.rotary_of(job)
+    start = None
+    for line in text.splitlines():
+        m = re.match(r"G0X(-?[\d.]+)(?:Y(-?[\d.]+))?$", line)
+        if m:
+            start = (float(m[1]), float(m[2]) if m[2] is not None and not rot else (rot.axis_y if rot else 0.0))
+            break
+    pts = [p for e in job.elements for path in e.paths for p in path]
+    pts += [(x, yy) for e in job.elements for yy, runs in e.rows for a, b, _ in runs for x in (a, b)]
+    if not pts or start is None:
+        raise ValueError("Nothing to frame")
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    if rot:
+        y = rot.axis_y
+        corners = [(min(xs), y), (max(xs), y), (min(xs), y)]
+    else:
+        corners = [(min(xs), min(ys)), (max(xs), min(ys)), (max(xs), max(ys)), (min(xs), max(ys)), (min(xs), min(ys))]
+    return {"start": start, "outline": corners, "rotary": bool(rot)}
 
 
 def job_text(design_json: dict) -> tuple[str, xcs.Job]:
@@ -357,6 +456,10 @@ class Handler(BaseHTTPRequestHandler):
                 text, job = job_text(b["design"])
                 if any(e.is_raster for e in job.elements) and not raster_verified(job) and not b.get("allow_unverified"):
                     return self._json({"error": "Fill/photo engraving on the rotary isn't verified against Studio yet."}, 400)
+                try:
+                    MACHINE.pointer(False)           # red alignment pointer off before the job
+                except Exception:
+                    pass
                 with MACHINE.lock:
                     d = MACHINE.need()
                     st = (d.status() or {}).get("curMode", {})
@@ -375,6 +478,24 @@ class Handler(BaseHTTPRequestHandler):
                 with MACHINE.lock:
                     data = MACHINE.need().request("/v1/file/content", params={"type": b.get("name", "global_calib.json")}, timeout=20)
                 return self._json({"data": data})
+            if p == "/api/head":
+                act = b.get("action")
+                if act == "where":
+                    return self._json(MACHINE.where())
+                if act == "pointer":
+                    return self._json(MACHINE.pointer(bool(b.get("on"))))
+                if act == "home":
+                    MACHINE.pointer(False)
+                    return self._json(MACHINE.move(0, 0))
+                if act == "move":
+                    return self._json(MACHINE.move(b.get("x"), b.get("y"), b.get("dx", 0), b.get("dy", 0), b.get("pointer")))
+                if act in ("start", "frame"):
+                    info = job_start_and_outline(b["design"])
+                    if act == "start":
+                        return self._json({**MACHINE.move(*info["start"], pointer=True), **info})
+                    pos = MACHINE.trace(info["outline"] + [info["start"]])
+                    return self._json({**pos, **info})
+                return self._json({"error": f"unknown head action {act}"}, 400)
             if p in ("/api/measure_preview", "/api/measure_cancel"):
                 if p.endswith("cancel"):
                     return self._json(MACHINE.measure_cancel())
