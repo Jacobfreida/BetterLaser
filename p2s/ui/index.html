@@ -85,6 +85,7 @@ input[type=range]{width:100%}
 #job{margin-top:auto;background:#EEF1F3}
 #send{width:100%;padding:11px;font-size:15px;font-weight:600;background:var(--go);border-color:var(--go);color:#fff;border-radius:var(--radius);border:1px solid}
 #send:disabled{opacity:.5}
+#rotBox{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--line)}
 .focusrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 #imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);background:#fff;max-height:150px;object-fit:contain}
 
@@ -198,6 +199,16 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
   <section id="job">
     <h2>Job</h2>
+    <div id="rotBox">
+      <label class="chk"><input type="checkbox" id="rotOn"> Rotary attachment (RA2, in the 4-pin port)</label>
+      <div id="rotFields" class="hidden grid2" style="margin-top:8px">
+        <label class="f">Object held by<select id="rotType"><option value="roller">Rollers</option><option value="chuck">Chuck</option></select></label>
+        <label class="f">Object diameter (mm)<input id="rotDia" type="number" min="5" max="300" step="0.1" placeholder="e.g. 80"></label>
+        <label class="f">Rotary line Y (mm)<input id="rotY" type="number" min="0" max="305" step="0.5"></label>
+        <button class="btn" id="rotPick" style="align-self:end" title="Click the top line of the object on the bed or camera picture">Set on bed</button>
+        <p class="muted" id="rotNote" style="grid-column:1/3;margin:0;line-height:1.4"></p>
+      </div>
+    </div>
     <div class="focusrow">
       <label class="f">Focus height Z (mm)<input id="focal" type="number" step="0.1" placeholder="Measure first"></label>
       <button class="btn" id="measureBtn" title="Click a spot on the material to measure its height">Measure</button>
@@ -234,6 +245,14 @@ const DEFAULT_OP = {
 
 // ---------------------------------------------------------------- state
 let D = {focal:null, fan_gear:3, purifier_gear:4, objects:[]};
+// Rotary (RA2). The object lies along the machine's X axis; the head parks over its top
+// line at Y = axis_y. Everything drawn above that line (toward the back of the machine,
+// as in Studio) is wrapped onto the surface: a shape d mm above the line is engraved
+// d mm further round the object.
+const ROT_DEFAULT = {on:false, type:"roller", diameter:null, axis_y:125};
+const ROT_X0 = 50, ROT_X1 = 550;           // the rotary's working length (Studio's limits)
+const rotary = () => (D.rotary && D.rotary.on) ? D.rotary : null;
+const circumference = () => { const r = rotary(); return r && r.diameter > 0 ? Math.PI * r.diameter : null; };
 let sel = null, tool = "select", status = {connected:false}, settings = {};
 let view = {x:-10, y:-10, w:BED_W+20, h:BED_H+20};
 const imgCache = new Map();       // id -> HTMLImageElement (original picture)
@@ -249,7 +268,7 @@ const r3 = v => Math.round(v * 1000) / 1000;
 function snapshot(){ history.push(JSON.stringify(D)); if (history.length > 80) history.shift(); future = []; autosave(); }
 function undo(){ if (!history.length) return; future.push(JSON.stringify(D)); D = JSON.parse(history.pop()); afterLoad(); }
 function redo(){ if (!future.length) return; history.push(JSON.stringify(D)); D = JSON.parse(future.pop()); afterLoad(); }
-function afterLoad(){ if (sel && !obj(sel)) sel = null; for (const o of D.objects) if (o.type === "image") ensureImage(o); render(); inspector(); autosave(); }
+function afterLoad(){ if (sel && !obj(sel)) sel = null; rotaryUI(); for (const o of D.objects) if (o.type === "image") ensureImage(o); render(); inspector(); autosave(); }
 const obj = id => D.objects.find(o => o.id === id);
 
 function autosave(){ try { localStorage.setItem("p2s.design", JSON.stringify(D, (k, v) => k === "_outline" ? undefined : v)); } catch(e) {} }
@@ -285,9 +304,11 @@ function screenToMm(ev){ const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.
 function applyView(){ svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`); }
 function fitView(){
   const r = svg.getBoundingClientRect(), pad = 22, aspect = r.width / Math.max(r.height, 1);
-  let w = BED_W + 2 * pad, h = BED_H + 2 * pad;
+  // on the rotary, one full turn of surface may reach past the back of the bed
+  const c = circumference(), top = Math.min(0, c ? D.rotary.axis_y - c : 0), H = BED_H - top;
+  let w = BED_W + 2 * pad, h = H + 2 * pad;
   if (w / h < aspect) w = h * aspect; else h = w / aspect;
-  view = {x: BED_W / 2 - w / 2, y: BED_H / 2 - h / 2, w, h}; applyView(); render();
+  view = {x: BED_W / 2 - w / 2, y: top + H / 2 - h / 2, w, h}; applyView(); render();
 }
 function zoom(f, cx, cy){
   cx ??= view.x + view.w / 2; cy ??= view.y + view.h / 2;
@@ -313,10 +334,33 @@ function render(){
   for (let x = 0; x <= BED_W; x += 100){ const t = el("text", {x, y:-px() * 5, "text-anchor":"middle"}, lab); t.textContent = x; }
   for (let y = 100; y <= BED_H; y += 100){ const t = el("text", {x:-px() * 6, y:y + px() * 4, "text-anchor":"end"}, lab); t.textContent = y; }
 
+  drawRotary();
   for (const o of D.objects) drawObject(o);
   if (sel && obj(sel)) drawSelection(obj(sel));
   if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
   if (measureMark) el("circle", {cx:measureMark.x, cy:measureMark.y, r:px() * 7, fill:"none", stroke:"#E0A100", "stroke-width":px() * 2.5}, svg);
+}
+
+function drawRotary(){
+  const r = rotary(); if (!r) return;
+  const y = r.axis_y, c = circumference(), k = px();
+  const g = el("g", {"pointer-events":"none"}, svg);
+  // outside the rotary's working length
+  el("rect", {x:0, y:0, width:ROT_X0, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
+  el("rect", {x:ROT_X1, y:0, width:BED_W - ROT_X1, height:BED_H, fill:"rgba(20,24,28,.55)"}, g);
+  // below the line is outside the work area (Studio's starts at the line and runs to the back)
+  if (y < BED_H) el("rect", {x:ROT_X0, y, width:ROT_X1 - ROT_X0, height:BED_H - y, fill:"rgba(20,24,28,.42)"}, g);
+  // one full turn of surface, unrolled above the top line
+  if (c){
+    el("rect", {x:ROT_X0, y:y - c, width:ROT_X1 - ROT_X0, height:c, fill:"rgba(233,220,194,.22)", stroke:"#E9DCC2", "stroke-width":k, "stroke-dasharray":`${k * 6} ${k * 4}`}, g);
+    const t = el("text", {x:ROT_X1 - k * 6, y:y - c + k * 15, "text-anchor":"end", fill:"#E9DCC2", "font-size":k * 11}, g);
+    t.textContent = `one full turn: ${c.toFixed(1)} mm`;
+  }
+  el("line", {x1:ROT_X0, y1:y, x2:ROT_X1, y2:y, stroke:"#E0A100", "stroke-width":k * 2}, g);
+  const label = "Rotary line: top of the object. Designs above it wrap round the surface.";
+  el("rect", {x:ROT_X0, y:y + k * 3, width:k * 7 * label.length * 0.86, height:k * 20, rx:k * 3, fill:"rgba(20,24,28,.82)"}, g);
+  const t = el("text", {x:ROT_X0 + k * 7, y:y + k * 17, fill:"#F2C84B", "font-size":k * 12}, g);
+  t.textContent = label;
 }
 
 function objTransform(o){ return `translate(${o.x + o.w / 2} ${o.y + o.h / 2}) rotate(${o.rot || 0}) translate(${-o.w / 2} ${-o.h / 2})`; }
@@ -359,6 +403,7 @@ svg.addEventListener("pointerdown", ev => {
   const p = screenToMm(ev), handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
   if (ev.button === 1 || spaceDown){ drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}}; return; }
   if (tool === "measure"){ doMeasure(p.x, p.y); return; }
+  if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
   if (tool === "rect" || tool === "ellipse"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
   if (tool === "text"){ addText(p.x, p.y); setTool("select"); return; }
   if (handle && sel){ const o = obj(sel); snapshot(); drag = {kind: handle === "rot" ? "rot" : "resize", handle, o, start:clone(o), p0:p}; return; }
@@ -424,7 +469,8 @@ function duplicate(){ const o = obj(sel); if (!o) return; snapshot(); const c = 
 
 const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom · Delete removes · Ctrl+D duplicates",
   rect:"Drag on the bed to draw a rectangle (Shift for a square)", ellipse:"Drag on the bed to draw an ellipse (Shift for a circle)",
-  text:"Click on the bed where the text should go", measure:"Click the spot on the material to measure. The head will move there."};
+  text:"Click on the bed where the text should go", measure:"Click the spot on the material to measure. The head will move there.",
+  rotline:"Click the top line of the object (where the laser should touch it first)"};
 function setTool(t){ tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
 
@@ -588,6 +634,7 @@ F("importFile").onchange = async () => {
       const r = await api("/api/import_xcs", JSON.parse(text));
       snapshot(); for (const o of r.objects) D.objects.push({...o, id:uid()});
       if (r.focal != null && D.focal == null){ D.focal = r.focal; F("focal").value = r.focal; }
+      if (r.rotary){ D.rotary = {...ROT_DEFAULT, ...D.rotary, ...r.rotary, diameter:r.rotary.diameter || (D.rotary && D.rotary.diameter) || null, on:true}; rotaryUI(); }
       toast(`Imported ${r.objects.length} shape(s) from ${file.name}` + (r.skipped.length ? `. Not supported yet: ${[...new Set(r.skipped)].join(", ")}` : ""));
     } else importSVG(text, file.name);
     render(); estimate();
@@ -639,7 +686,10 @@ function payload(){
     objs.push(c);
   }
   const focal = parseFloat(F("focal").value);
-  return {focal:isFinite(focal) ? focal : null, fan_gear:D.fan_gear, purifier_gear:D.purifier_gear, objects:objs};
+  const out = {focal:isFinite(focal) ? focal : null, fan_gear:D.fan_gear, purifier_gear:D.purifier_gear, objects:objs};
+  const r = rotary();
+  if (r) out.rotary = {type:r.type, diameter:r.diameter > 0 ? r.diameter : null, axis_y:r.axis_y};
+  return out;
 }
 let estTimer = null;
 function estimate(){
@@ -664,9 +714,11 @@ $("#send").onclick = async () => {
   let warn = "";
   if (!isFinite(focal)) warn += "<p><b>No focus height is set.</b> Use Measure first, or the laser will engrave at the bed's current height.</p>";
   if (status.connected && status.lidClosed === false) warn += "<p>The lid is open. Close it before pressing Start.</p>";
+  const rr = rotary();
+  if (rr) warn += `<p><b>Rotary job (${rr.type === "chuck" ? "chuck" : "rollers"}).</b> The head moves over Y ${rr.axis_y} mm and the object turns from where it sits now, so turn the spot you want engraved to the top first. Check the rotary is plugged into the 4-pin port and the object can turn freely.</p>`;
   let allow = false;
   if (r.has_raster && !r.raster_verified){
-    warn += `<p><b>Fill and picture engraving are experimental.</b> Their move format hasn't been checked against xTool Studio's output yet. Run them only on scrap, stay at the machine, and be ready to press Stop.</p>
+    warn += `<p><b>Fill and picture engraving ${rr ? "on the rotary are" : "are"} experimental.</b> Their move format hasn't been checked against xTool Studio's output yet. Run them only on scrap, stay at the machine, and be ready to press Stop.</p>
       <label class="chk"><input type="checkbox" id="allowExp"> I understand, load it anyway</label>`;
   }
   const ok = await dialog("Load this job?", `<p>About ${fmtTime(r.seconds)} of laser time. Focus Z ${isFinite(focal) ? focal + " mm" : "not set"}.</p>${warn}
@@ -680,6 +732,29 @@ $("#send").onclick = async () => {
 };
 $("#pauseBtn").onclick = async () => { try { await api("/api/pause", {}); toast("Pause sent."); } catch(e){ toast(e.message, true); } };
 $("#stopBtn").onclick = async () => { try { await api("/api/stop", {}); toast("Stop sent."); } catch(e){ toast(e.message, true); } };
+
+// ---------------------------------------------------------------- rotary attachment
+function rotaryUI(){
+  if (!D.rotary) D.rotary = {...ROT_DEFAULT};
+  const r = D.rotary;
+  F("rotOn").checked = !!r.on; F("rotFields").classList.toggle("hidden", !r.on);
+  F("rotType").value = r.type; F("rotDia").value = r.diameter ?? ""; F("rotY").value = r.axis_y;
+  const c = circumference();
+  F("rotNote").textContent = !r.on ? "" :
+    (r.type === "chuck" && !c ? "The chuck needs the object's diameter to turn the right amount. " : "") +
+    (c ? `One turn of the object covers ${c.toFixed(1)} mm above the line. ` : "Enter the diameter to see one full turn on the bed. ") +
+    "Measure focus on the top of the object, on the rotary line.";
+}
+function rotaryChanged(){
+  snapshot();
+  const r = D.rotary, d = parseFloat(F("rotDia").value), y = parseFloat(F("rotY").value);
+  r.on = F("rotOn").checked; r.type = F("rotType").value;
+  r.diameter = isFinite(d) && d > 0 ? d : null;
+  if (isFinite(y)) r.axis_y = Math.min(BED_H, Math.max(0, y));
+  rotaryUI(); fitView(); estimate(); autosave();
+}
+for (const id of ["rotOn", "rotType", "rotDia", "rotY"]) F(id).addEventListener("change", rotaryChanged);
+F("rotPick").onclick = () => setTool("rotline");
 
 // ---------------------------------------------------------------- focus height
 F("focal").addEventListener("change", () => { const v = parseFloat(F("focal").value); D.focal = isFinite(v) ? v : null; autosave(); if (cam.raw) dewarpCamera(); estimate(); });
@@ -802,9 +877,9 @@ F("openFile").onchange = async () => {
   try { const j = JSON.parse(await file.text()); snapshot(); D = j.design || j; await loadDesign(); toast(`Opened ${file.name}`); }
   catch(e){ toast("Couldn't open that file: " + e.message, true); }
 };
-$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[]}; sel = null; render(); inspector(); estimate(); };
+$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[], rotary:D.rotary}; rotaryUI(); sel = null; render(); inspector(); estimate(); };
 async function loadDesign(){
-  sel = null; F("focal").value = D.focal ?? "";
+  sel = null; F("focal").value = D.focal ?? ""; rotaryUI();
   for (const o of D.objects){ if (o.type === "text") await refreshText(o, true); if (o.type === "image"){ imgCache.delete(o.id); await ensureImage(o); } }
   render(); inspector(); estimate(); autosave();
 }
@@ -815,6 +890,7 @@ async function loadDesign(){
   setTool("select");
   try { settings = await api("/api/settings"); } catch(e){}
   await loadFonts();
+  rotaryUI();
   try { const saved = JSON.parse(localStorage.getItem("p2s.design") || "null"); if (saved && saved.objects){ D = saved; await loadDesign(); } } catch(e){}
   fitView(); inspector(); await poll();
 })();

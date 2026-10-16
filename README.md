@@ -24,6 +24,10 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
   machine's own calibration, corrected for material height.
 - **Measure:** click a spot and the head's IR sensor measures the material; focus Z is set
   automatically (Z = 25 − distance).
+- **Rotary (RA2, 4-pin port):** tick *Rotary attachment* in the Job panel, choose rollers or
+  chuck, enter the object's diameter and click *Set on bed* on the object's top line. Anything
+  drawn above that line wraps round the object (one full turn is shown on the bed). Rotary
+  projects from Studio (.xcs) import with their settings.
 - **Load job on laser** uploads it in the same binary format Studio uses. Then press **Start**
   on the machine. Pause and Stop are in the top bar.
 
@@ -32,6 +36,10 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - Picture engraving reproduces a real Studio photo job line for line (73,073 lines, within 0.001 mm),
   and the binary files are byte-identical to Studio's format. Fill uses the same verified move format.
   Grayscale uses the same moves, with power varying per segment.
+- Rotary score/cut on rollers reproduces a real Studio rotary job (every setup line identical,
+  every point exact). Chuck mode uses the same code with Studio's chuck factor (128 / circumference)
+  but hasn't been compared with a Studio chuck job. Fill and pictures on the rotary are marked
+  experimental until checked against a Studio rotary photo job.
 - Camera alignment is fitted from one test burn; use Camera > Align to fine-tune if needed.
 
 ## Command line

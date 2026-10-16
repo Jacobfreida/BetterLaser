@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import logging
 import os
 import sys
@@ -168,6 +169,13 @@ def job_text(design_json: dict) -> tuple[str, xcs.Job]:
     return gcode.generate(job), job
 
 
+def raster_verified(job) -> bool:
+    """Fill/photo moves are checked against Studio on the flat bed; on the rotary not yet."""
+    if job.rotary:
+        return gcode.RASTER_VERIFIED and gcode.ROTARY_RASTER_VERIFIED
+    return gcode.RASTER_VERIFIED
+
+
 def estimate_seconds(job) -> float:
     t = 0.0
     for e in job.elements:
@@ -192,6 +200,9 @@ def xcs_to_design(doc: dict) -> dict:
         dev = dict(doc["device"]["data"]["value"])[canvas_id]
         dev_displays = dict(dev["displays"]["value"])
         cfg = dev["data"].get(dev["mode"], {})
+        rotary = dev["mode"] == "LASER_CYLINDER"
+        if rotary and (cfg.get("rotaryAttachmentModel") or "ra2") != "ra2":
+            raise ValueError("Only RA2 rotary projects can be imported.")
         objs, skipped = [], []
         for d in canvas["displays"]:
             entry = dev_displays.get(d["id"]) or d
@@ -201,13 +212,27 @@ def xcs_to_design(doc: dict) -> dict:
                 skipped.append(d["type"]); continue
             p = xcs._params(entry, ptype)
             mode = {"VECTOR_ENGRAVING": "score", "VECTOR_CUTTING": "cut", "FILL_VECTOR_ENGRAVING": "fill"}.get(ptype, "score")
-            objs.append({"id": d["id"], "type": t, "x": d["x"], "y": d["y"], "w": abs(d["width"]),
-                         "h": abs(d["height"]), "rot": d.get("angle", 0) or 0,
+            w, h, ang = abs(d["width"]), abs(d["height"]), d.get("angle", 0) or 0
+            # Studio's x/y is the shape's own corner after rotating about it; find the centre
+            a = math.radians(ang)
+            cx = d["x"] + w / 2 * math.cos(a) - h / 2 * math.sin(a)
+            cy = d["y"] + w / 2 * math.sin(a) + h / 2 * math.cos(a)
+            if rotary:
+                # Studio's rotary canvas is this app's bed view turned 90 degrees:
+                # X = canvas y + 50, and y = 250 - canvas x (U is measured from the axis line)
+                cx, cy, ang = cy + 50, 250 - cx, ang - 90
+            objs.append({"id": d["id"], "type": t, "x": cx - w / 2, "y": cy - h / 2, "w": w,
+                         "h": h, "rot": ang,
                          "op": {"mode": mode, "power": p.get("power", 10), "speed": p.get("speed", 100),
                                 "passes": p.get("repeat", 1), "air": p.get("airPump", 25),
                                 "density": p.get("density", 100)}})
-        return {"focal": cfg.get("focalLength"), "fan_gear": cfg.get("fanGear", 3),
-                "purifier_gear": cfg.get("purifierGear", 4), "objects": objs, "skipped": skipped}
+        out = {"focal": cfg.get("focalLength"), "fan_gear": cfg.get("fanGear", 3),
+               "purifier_gear": cfg.get("purifierGear", 4), "objects": objs, "skipped": skipped}
+        if rotary:
+            dia = cfg.get("diameter") or ((cfg.get("perimeter") or 0) / math.pi) or None
+            out["rotary"] = {"type": "chuck" if cfg.get("rotaryAttachmentType") == "catch" else "roller",
+                             "diameter": dia, "axis_y": 125}
+        return out
     finally:
         os.unlink(f.name)
 
@@ -272,12 +297,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/gcode":
                 text, job = job_text(b)
                 return self._json({"gcode": text, "seconds": estimate_seconds(job),
-                                   "raster_verified": gcode.RASTER_VERIFIED,
+                                   "raster_verified": raster_verified(job),
                                    "has_raster": any(e.is_raster for e in job.elements)})
             if p == "/api/send":
                 text, job = job_text(b["design"])
-                if any(e.is_raster for e in job.elements) and not gcode.RASTER_VERIFIED and not b.get("allow_unverified"):
-                    return self._json({"error": "Fill/photo engraving isn't verified against Studio yet."}, 400)
+                if any(e.is_raster for e in job.elements) and not raster_verified(job) and not b.get("allow_unverified"):
+                    return self._json({"error": "Fill/photo engraving on the rotary isn't verified against Studio yet."}, 400)
                 with MACHINE.lock:
                     d = MACHINE.need()
                     st = (d.status() or {}).get("curMode", {})

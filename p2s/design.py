@@ -5,6 +5,7 @@ A design is plain JSON (also the app's project file format):
 {
   "focal": 15.5,                     # Z for the job (25 - measured distance), mm
   "fan_gear": 3, "purifier_gear": 4,
+  "rotary": {"type": "roller" | "chuck", "diameter": 80, "axis_y": 125},   # optional, RA2
   "objects": [
     {"id": "...", "type": "rect" | "ellipse" | "text" | "image" | "path",
      "x": 10, "y": 10, "w": 50, "h": 20, "rot": 0,          # mm, rot = degrees clockwise
@@ -161,7 +162,15 @@ def build_job(design: dict) -> Job:
             elements.append(e)
     if not elements:
         raise DesignError("The design produced no laser moves (empty text or blank image?)")
-    return Job(mode="HONEYCOMB_PANEL", material=None, thickness=None,
+    rot = design.get("rotary") or None
+    if rot:
+        rot = {"model": "ra2", "type": rot.get("type", "roller"),
+               "diameter": float(rot["diameter"]) if rot.get("diameter") else None,
+               "axis_y": float(rot.get("axis_y", 125))}
+        if rot["type"] == "chuck" and not rot["diameter"]:
+            raise DesignError("Chuck mode needs the object's diameter.")
+    return Job(mode="LASER_CYLINDER" if rot else "HONEYCOMB_PANEL", material=0 if rot else None,
+               thickness=None,
                focal_len=float(design["focal"]) if design.get("focal") is not None else None,
                fan_gear=design.get("fan_gear", 3), purifier_gear=design.get("purifier_gear", 4),
-               elements=elements)
+               elements=elements, rotary=rot)
