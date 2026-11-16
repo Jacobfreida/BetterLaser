@@ -521,7 +521,11 @@ svg.addEventListener("pointermove", ev => {
   }
   if (drag.kind === "draw"){ drag.x1 = p.x; drag.y1 = p.y; if (ev.shiftKey){ const s = Math.max(Math.abs(p.x - drag.x0), Math.abs(p.y - drag.y0)); drag.x1 = drag.x0 + Math.sign(p.x - drag.x0 || 1) * s; drag.y1 = drag.y0 + Math.sign(p.y - drag.y0 || 1) * s; } render(); return; }
   const o = drag.o;
-  if (drag.kind === "move"){ o.x = r3(drag.start.x + p.x - drag.p0.x); o.y = r3(drag.start.y + p.y - drag.p0.y); drag.moved = true; render(); inspectorValues(); return; }
+  if (drag.kind === "move"){
+    // a click with a tiny wobble isn't a move (and shouldn't cost an undo step)
+    if (!drag.moved && Math.hypot(p.x - drag.p0.x, p.y - drag.p0.y) < px() * 3) return;
+    o.x = r3(drag.start.x + p.x - drag.p0.x); o.y = r3(drag.start.y + p.y - drag.p0.y); drag.moved = true; render(); inspectorValues(); return;
+  }
   if (drag.kind === "rot"){ const cx = o.x + o.w / 2, cy = o.y + o.h / 2; let a = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90; if (ev.shiftKey) a = Math.round(a / 15) * 15; o.rot = Math.round(((a % 360) + 360) % 360 * 10) / 10; render(); inspectorValues(); return; }
   if (drag.kind === "resize"){
     const s = drag.start, a = (s.rot || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
@@ -626,8 +630,10 @@ function inspectorValues(){
   if (isWrapped(o) && document.activeElement !== F("tshift")) F("tshift").value = o.text.wrap.shift || 0;
   for (const [id, k] of [["fx","x"],["fy","y"],["fw","w"],["fh","h"],["frot","rot"]]) if (document.activeElement !== F(id)) F(id).value = r3(o[k] || 0);
   const op = o.op, m = op.mode;
-  F("lpower").value = op.power ?? ""; F("lspeed").value = op.speed ?? ""; F("lpasses").value = op.passes ?? 1; F("lair").value = op.air ?? 25;
-  F("ldensity").value = op.density ?? 100; F("lminpower").value = op.min_power ?? 0; F("lbidir").checked = (op.scan || "zMode") === "zMode";
+  // never overwrite the field the user is typing in
+  const put = (id, v) => { if (document.activeElement !== F(id)) F(id).value = v; };
+  put("lpower", op.power ?? ""); put("lspeed", op.speed ?? ""); put("lpasses", op.passes ?? 1); put("lair", op.air ?? 25);
+  put("ldensity", op.density ?? 100); put("lminpower", op.min_power ?? 0); F("lbidir").checked = (op.scan || "zMode") === "zMode";
   F("imode").value = op.image_mode === "dither" ? (op.dither || "Jarvis") : (op.image_mode === "threshold" ? "threshold" : "grayscale");
   const raster = m === "fill" || m === "image", gray = m === "image" && F("imode").value === "grayscale";
   $("#densityF").classList.toggle("hidden", !raster); $("#bidirF").classList.toggle("hidden", !raster);
@@ -635,16 +641,42 @@ function inspectorValues(){
   $("#powerLbl").textContent = gray ? "Max power (%)" : "Power (%)";
   for (const id of ["lpower","lspeed","lpasses","lair","ldensity","lminpower"]) F(id).disabled = m === "off";
 }
-function bindNum(id, fn){ F(id).addEventListener("change", () => { const o = obj(sel); if (!o) return; const v = parseFloat(F(id).value); if (!isFinite(v)) return inspectorValues(); snapshot(); fn(o, v); render(); inspectorValues(); estimate(); }); }
+// Number fields in the side panel. The edit belongs to the object that was selected when the
+// field got focus, so clicking another object (or the bed) mid-edit can't send it elsewhere.
+// live: apply while typing (after a short pause), for settings like power and air assist;
+// geometry fields apply when you press Enter, Tab or click away, so proportions don't drift.
+function bindNum(id, fn, live){
+  const inp = F(id);
+  const apply = final => {
+    clearTimeout(inp._t); inp._t = null;
+    const o = obj(inp._target ?? sel); if (!o) return;
+    const v = parseFloat(inp.value);
+    if (!isFinite(v)){ if (final) inspectorValues(); return; }
+    if (!inp._snapped){ snapshot(); inp._snapped = true; }
+    fn(o, v); render(); estimate(); autosave();
+    if (final){ inp._snapped = false; inp._target = undefined; inspectorValues(); }
+  };
+  inp.addEventListener("focus", () => { inp._target = sel; inp._snapped = false; });
+  if (live) inp.addEventListener("input", () => { clearTimeout(inp._t); inp._t = setTimeout(() => apply(false), 300); });
+  // a pending live edit that never got a change event (e.g. the window lost focus) still counts
+  inp.addEventListener("change", () => apply(true));
+  inp.addEventListener("blur", () => { if (inp._t) apply(true); inp._target = undefined; });
+}
+// Clicking on the bed or the tool rail doesn't take focus away from a field by itself;
+// do it first, so whatever was typed is saved before the click changes the selection.
+for (const area of [$("#stage"), $("#rail")]) if (area) area.addEventListener("pointerdown", () => {
+  const a = document.activeElement;
+  if (a && a.closest && a.closest("#side") && (a.tagName === "INPUT" || a.tagName === "SELECT")) a.blur();
+}, true);
 bindNum("fx", (o, v) => o.x = v); bindNum("fy", (o, v) => o.y = v); bindNum("frot", (o, v) => o.rot = ((v % 360) + 360) % 360);
 bindNum("fw", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.h = r3(o.h * v / o.w); o.w = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
 bindNum("fh", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.w = r3(o.w * v / o.h); o.h = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
 for (const id of ["fx","fy","fw","fh","frot"]) F(id).addEventListener("change", () => { const o = obj(sel); if (o) rewrapFor(o); });
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-bindNum("lpower", (o, v) => o.op.power = clamp(v, 1, 100)); bindNum("lspeed", (o, v) => o.op.speed = clamp(v, 1, 1000));
-bindNum("lpasses", (o, v) => o.op.passes = clamp(Math.round(v), 1, 50)); bindNum("lair", (o, v) => o.op.air = clamp(v, 0, 100));
-bindNum("lminpower", (o, v) => o.op.min_power = clamp(v, 0, o.op.power));
-bindNum("ldensity", (o, v) => { o.op.density = clamp(v, 10, 300); if (o.type === "image") processImage(o); });
+bindNum("lpower", (o, v) => o.op.power = clamp(v, 1, 100), true); bindNum("lspeed", (o, v) => o.op.speed = clamp(v, 1, 1000), true);
+bindNum("lpasses", (o, v) => o.op.passes = clamp(Math.round(v), 1, 50), true); bindNum("lair", (o, v) => o.op.air = clamp(v, 0, 100), true);
+bindNum("lminpower", (o, v) => o.op.min_power = clamp(v, 0, o.op.power), true);
+bindNum("ldensity", (o, v) => { o.op.density = clamp(v, 10, 300); if (o.type === "image") processImage(o); }, true);
 F("lbidir").onchange = () => { const o = obj(sel); snapshot(); o.op.scan = F("lbidir").checked ? "zMode" : "oneWay"; };
 F("imode").onchange = () => { const o = obj(sel); snapshot(); const v = F("imode").value; if (v === "grayscale") o.op.image_mode = "grayscale"; else if (v === "threshold") o.op.image_mode = "threshold"; else { o.op.image_mode = "dither"; o.op.dither = v; } processImage(o); inspectorValues(); };
 for (const b of document.querySelectorAll("#modes button")) b.onclick = () => {
