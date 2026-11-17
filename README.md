@@ -16,6 +16,9 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Shapes:** rectangles, ellipses, lines (Shift snaps to 45°), polygons, stars, rounded
   rectangles and hearts, text from any installed TrueType font, imported SVG files,
   and rectangles/circles from xTool .xcs projects.
+- **Text boxes:** tick *Text box: wrap lines to fit the width* in the text panel and long text
+  breaks onto new lines inside the box. Drag the box's side (or type W) to set the width; *Size*
+  sets the letter height; the box's height follows the lines. *Align* works within the box.
 - **Text around a shape:** pick *Wrap around* in the text panel to set text over the top of a
   circle, ellipse, rectangle or any drawn shape (or inside, along the bottom). Drag the text to
   slide it round; it follows the shape when you move or resize it. Set the shape to *Off* to

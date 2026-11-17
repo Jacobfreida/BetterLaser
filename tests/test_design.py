@@ -89,5 +89,14 @@ assert [e.id for e in design.build_job(mixed).elements] == ["logo", "band", "lab
 g = gcode.generate(design.build_job(mixed)).splitlines()
 kinds = [l for l in g if l.startswith("M2519")]
 assert kinds == ["M2519S2T0", "M2519S4T0", "M2519S1T0", "M2519S3T0", "M2519S3T0"], kinds
+# 10. text box: lines wrap to the box width at the chosen size; height follows the lines
+long = {"content": "The quick brown fox jumps over the lazy dog again and again", "font": font, "size": 8}
+_, w1, h1 = design.text_geometry(long)
+pb, w2, h2 = design.text_geometry({**long, "box_width": 60})
+assert w1 > 60 and close(w2, 60) and h2 > 3 * h1 and max(x for q in pb for x, _ in q) <= 60 + 1e-6
+pc, _, _ = design.text_geometry({**long, "box_width": 60, "align": "center"})
+assert min(x for q in pc for x, _ in q) > 0.5        # centred lines move in from the left edge
+_, _, h3 = design.text_geometry({**long, "box_width": 60, "size": 4})
+assert h3 < h2 / 2                                    # smaller letters, fewer and shorter lines
 print("design checks passed: fill, nonzero holes/overlaps, rotation, text box, image power, job order, "
-      "text wrapped round shapes, lines")
+      "text wrapped round shapes, lines, text boxes")

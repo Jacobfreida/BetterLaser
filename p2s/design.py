@@ -56,10 +56,16 @@ def text_geometry(t: dict):
     path, _, idx = font.rpartition("|")
     if not path:
         path, idx = font, "0"
+    box = float(t["box_width"]) if t.get("box_width") else None
     paths, (x0, y0, x1, y1) = fonts.text_paths(
         t.get("content", ""), path, float(t.get("size", 10)), index=int(idx or 0),
         align=t.get("align", "left"), line_spacing=float(t.get("line_spacing", 1.2)),
-        letter_spacing_mm=float(t.get("letter_spacing", 0)))
+        letter_spacing_mm=float(t.get("letter_spacing", 0)), wrap_width=box)
+    if box:
+        # text box: the words wrap inside a box of fixed width at the chosen size; the box's
+        # left edge is x = 0 and its height follows the number of lines
+        paths = [[(x, y - y0) for x, y in p] for p in paths]
+        return paths, max(box, x1, 1e-6), max(y1 - y0, 1e-6)
     paths = [[(x - x0, y - y0) for x, y in p] for p in paths]
     return paths, max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
 

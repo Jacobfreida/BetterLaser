@@ -285,16 +285,21 @@ def load_font(path: str, index: int = 0) -> TTFont:
 
 def text_paths(text: str, font_path: str, size_mm: float, *, index: int = 0,
                align: str = "left", line_spacing: float = 1.2, letter_spacing_mm: float = 0.0,
-               tol: float = 0.02) -> tuple[list[list[Point]], tuple[float, float, float, float]]:
+               tol: float = 0.02, wrap_width: float | None = None
+               ) -> tuple[list[list[Point]], tuple[float, float, float, float]]:
     """Return (closed polylines in mm with y down, bbox (x0, y0, x1, y1)).
 
     size_mm is the font's em height. Origin: first baseline at y = ascender.
+    wrap_width: break lines between words so none is wider than this (mm); a word that
+    is wider on its own is broken between letters. Alignment is then within that width.
     """
     f = load_font(font_path, index)
     scale = size_mm / f.units_per_em
     asc = f.ascender * scale
     line_h = (f.ascender - f.descender + f.line_gap) * scale * line_spacing / 1.2 if line_spacing else size_mm
     lines = text.split("\n")
+    if wrap_width:
+        lines = [w for line in lines for w in wrap_line(f, line, scale, letter_spacing_mm, wrap_width)]
     widths, glyph_lines = [], []
     for line in lines:
         gl, x, prev = [], 0.0, None
@@ -308,6 +313,8 @@ def text_paths(text: str, font_path: str, size_mm: float, *, index: int = 0,
         widths.append(max(0.0, x - letter_spacing_mm if line else 0.0))
         glyph_lines.append(gl)
     maxw = max(widths) if widths else 0.0
+    if wrap_width:
+        maxw = max(maxw, wrap_width)
     paths = []
     for li, (gl, w) in enumerate(zip(glyph_lines, widths)):
         shift = {"center": (maxw - w) / 2, "right": maxw - w}.get(align, 0.0)
@@ -323,6 +330,40 @@ def text_paths(text: str, font_path: str, size_mm: float, *, index: int = 0,
     else:
         bbox = (0.0, 0.0, 0.0, 0.0)
     return paths, bbox
+
+
+def line_width(f, line: str, scale: float, letter_spacing_mm: float = 0.0) -> float:
+    x, prev = 0.0, None
+    for ch in line:
+        gid = f.cmap.get(ord(ch), 0)
+        if prev is not None:
+            x += f.kern.get((prev, gid), 0) * scale
+        x += f.advance(gid) * scale + letter_spacing_mm
+        prev = gid
+    return max(0.0, x - letter_spacing_mm) if line else 0.0
+
+
+def wrap_line(f, line: str, scale: float, letter_spacing_mm: float, width: float) -> list[str]:
+    """Greedy word wrap of one line to `width` mm. Spaces at a break are dropped."""
+    if line_width(f, line, scale, letter_spacing_mm) <= width:
+        return [line]
+    out, cur = [], ""
+    for word in line.split(" "):
+        trial = f"{cur} {word}" if cur else word
+        if line_width(f, trial, scale, letter_spacing_mm) <= width:
+            cur = trial
+            continue
+        if cur:
+            out.append(cur)
+        # a word too long for the box on its own is split between letters
+        while word and line_width(f, word, scale, letter_spacing_mm) > width:
+            k = 1
+            while k < len(word) and line_width(f, word[:k + 1], scale, letter_spacing_mm) <= width:
+                k += 1
+            out.append(word[:k]); word = word[k:]
+        cur = word
+    out.append(cur)
+    return out
 
 
 def glyph_run(text: str, font_path: str, size_mm: float, *, index: int = 0,
