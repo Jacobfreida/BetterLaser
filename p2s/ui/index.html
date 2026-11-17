@@ -199,6 +199,8 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
           <label class="f" style="grid-column:1/3">Font<select id="tfont"></select></label>
           <label class="f">Size (mm)<input id="tsize" type="number" min="1" step="0.5"></label>
           <label class="f">Align<select id="talign"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+          <label class="chk" id="tboxF" style="grid-column:1/3" title="Long text breaks onto new lines to fit the box. Drag the box's sides (or type W) to set the width; Size sets the letter height.">
+            <input type="checkbox" id="tbox"> Text box: wrap lines to fit the width</label>
           <label class="f" style="grid-column:1/3">Wrap around<select id="twrap"></select></label>
           <label class="f wrapF">Side<select id="tside"><option value="outside">Outside, over the top</option><option value="inside">Inside, along the bottom</option></select></label>
           <label class="f wrapF">Gap from shape (mm)<input id="tgap" type="number" step="0.5"></label>
@@ -533,7 +535,8 @@ svg.addEventListener("pointermove", ev => {
     const lx = (p.x - cx) * ca + (p.y - cy) * sa, ly = -(p.x - cx) * sa + (p.y - cy) * ca;   // pointer in object frame
     const h = drag.handle, ax = h.includes("w") ? s.w / 2 : -s.w / 2, ay = h.includes("n") ? s.h / 2 : -s.h / 2;  // fixed opposite corner
     let w = Math.max(0.5, Math.abs(lx - ax)), hh = Math.max(0.5, Math.abs(ly - ay));
-    if ($("#flock").checked || o.type === "image" || ev.shiftKey){ const k = Math.max(w / s.w, hh / s.h); w = s.w * k; hh = s.h * k; }
+    if (isBoxText(o)) hh = s.h;          // a text box's height follows its lines
+    else if ($("#flock").checked || o.type === "image" || ev.shiftKey){ const k = Math.max(w / s.w, hh / s.h); w = s.w * k; hh = s.h * k; }
     const sx = h.includes("w") ? -1 : 1, sy = h.includes("n") ? -1 : 1;
     const ncx = ax + sx * w / 2, ncy = ay + sy * hh / 2;            // new centre in object frame
     const gx = cx + ncx * ca - ncy * sa, gy = cy + ncx * sa + ncy * ca;
@@ -560,6 +563,11 @@ svg.addEventListener("pointerup", ev => {
   }
   if ((d.kind === "move" || d.kind === "wrap") && !d.moved) history.pop();
   if (d.kind === "resize" && d.o.shape) regenShape(d.o);
+  if (d.kind === "resize" && isBoxText(d.o)){
+    const o = d.o, top = {x:o.x, y:o.y};
+    o.text.box_width = r3(Math.max(o.w, o.text.size || 1));
+    refreshText(o, false).then(() => { o.x = top.x; o.y = top.y; render(); inspectorValues(); estimate(); autosave(); });
+  }
   if (["move","resize","rot"].includes(d.kind)){ if (d.o.type === "image") processImage(d.o); rewrapFor(d.o); estimate(); autosave(); }
   if (d.kind === "wrap" && d.moved){ rewrapSoon(d.o); inspector(); estimate(); autosave(); }
   render();
@@ -611,6 +619,8 @@ function inspector(){
   const wrapped = isWrapped(o);
   F("frot").disabled = o.type === "image" || wrapped;
   for (const id of ["fx","fy","fw","fh"]) F(id).disabled = wrapped;
+  if (isBoxText(o)) F("fh").disabled = true;        // height follows the wrapped lines
+  if (o.type === "text"){ F("tbox").checked = !!o.text.box_width; F("tboxF").classList.toggle("hidden", wrapped); }
   if (o.type === "text"){
     const ws = F("twrap"); ws.innerHTML = "<option value=''>Nothing (straight text)</option>";
     for (const t of D.objects) if (canWrapAround(t)){ const op = document.createElement("option"); op.value = t.id; op.textContent = `${objName(t)} ${r3(t.w).toFixed(0)}×${r3(t.h).toFixed(0)} at ${r3(t.x).toFixed(0)}, ${r3(t.y).toFixed(0)}`; ws.append(op); }
@@ -669,7 +679,9 @@ for (const area of [$("#stage"), $("#rail")]) if (area) area.addEventListener("p
   if (a && a.closest && a.closest("#side") && (a.tagName === "INPUT" || a.tagName === "SELECT")) a.blur();
 }, true);
 bindNum("fx", (o, v) => o.x = v); bindNum("fy", (o, v) => o.y = v); bindNum("frot", (o, v) => o.rot = ((v % 360) + 360) % 360);
-bindNum("fw", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.h = r3(o.h * v / o.w); o.w = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
+bindNum("fw", (o, v) => { v = Math.max(0.1, v);
+  if (isBoxText(o)){ o.text.box_width = r3(Math.max(v, o.text.size || 1)); o.w = o.text.box_width; refreshText(o, false).then(() => { render(); inspectorValues(); estimate(); autosave(); }); return; }
+  if ($("#flock").checked || o.type === "image") o.h = r3(o.h * v / o.w); o.w = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
 bindNum("fh", (o, v) => { v = Math.max(0.1, v); if ($("#flock").checked || o.type === "image") o.w = r3(o.w * v / o.h); o.h = v; if (o.type === "image") processImage(o); if (o.shape) regenShape(o); });
 for (const id of ["fx","fy","fw","fh","frot"]) F(id).addEventListener("change", () => { const o = obj(sel); if (o) rewrapFor(o); });
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -693,6 +705,17 @@ for (const id of ["ttext","tsize","talign","tfont"]) F(id).addEventListener(id =
     // a new size means a new natural size; other edits keep the box's stretch
     await refreshText(o, id !== "tsize"); render(); inspectorValues(); estimate();
   }, id === "ttext" ? 350 : 0);
+});
+F("tbox").addEventListener("change", async () => {
+  const o = obj(sel); if (!o || o.type !== "text") return;
+  snapshot();
+  if (F("tbox").checked){
+    // start from the box as it looks now, but don't make one enormous line the width
+    const size = o.text.size || 10;
+    o.text.box_width = r3(Math.max(size, o.w > 150 ? 100 : o.w));
+    o.rot = o.rot || 0;
+  } else delete o.text.box_width;
+  await refreshText(o, false); render(); inspector(); estimate(); autosave();
 });
 for (const id of ["twrap","tside","tgap","tshift"]) F(id).addEventListener("change", async () => {
   const o = obj(sel); if (!o || o.type !== "text") return;
@@ -771,7 +794,16 @@ async function loadFonts(){
   for (const f of fonts){ const op = document.createElement("option"); op.value = f.id; op.textContent = f.style && f.style !== "Regular" ? `${f.family} ${f.style}` : f.family; s.append(op); }
 }
 function defaultFont(){ const pref = ["Arial","Segoe UI","Calibri","DejaVu Sans","Liberation Sans"]; for (const n of pref){ const f = fonts.find(f => f.family === n && /regular|normal|book/i.test(f.style)); if (f) return f.id; } return fonts[0] ? fonts[0].id : ""; }
+const isBoxText = o => !!(o && o.type === "text" && o.text && o.text.box_width && !isWrapped(o));
 async function refreshText(o, keepScale){
+  if (isBoxText(o)){
+    // text box: letters stay at the chosen size, lines wrap to the box width, height follows
+    try {
+      const r = await api("/api/text", o.text);
+      o.w = r3(r.nat_w); o.h = r3(r.nat_h); o.nat_w = r.nat_w; o.nat_h = r.nat_h; o._outline = r;
+    } catch(e){ toast("Couldn't render the text: " + e.message, true); }
+    return;
+  }
   if (isWrapped(o)){
     const t = obj(o.text.wrap.target);
     if (!t){ delete o.text.wrap; }
