@@ -16,6 +16,11 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Shapes:** rectangles, ellipses, lines (Shift snaps to 45°), polygons, stars, rounded
   rectangles and hearts, text from any installed TrueType font, imported SVG files,
   and rectangles/circles from xTool .xcs projects.
+- **Picture clean-up:** in the picture panel, *Remove background* clears a plain background
+  from the picture's edges inward (set how strict with *Colour match*); *Remove area* removes one
+  clicked region of similar colour; *Eraser* and *Restore* are brushes (size in mm). Removed parts
+  never burn. Undo works on every step and *Reset* brings the whole picture back. Only the parts
+  that will burn are drawn on the bed; the rest of the picture box is see-through.
 - **Text boxes:** tick *Text box: wrap lines to fit the width* in the text panel and long text
   breaks onto new lines inside the box. Drag the box's side (or type W) to set the width; *Size*
   sets the letter height; the box's height follows the lines. *Align* works within the box.

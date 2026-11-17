@@ -91,7 +91,10 @@ input[type=range]{width:100%}
 .jog .btn{padding:0;font-size:16px}
 #rotBox{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--line)}
 .focusrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
-#imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);background:#fff;max-height:150px;object-fit:contain}
+#imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);max-height:150px;object-fit:contain;
+  background:repeating-conic-gradient(#e6e8eb 0 25%,#fff 0 50%) 0 0/14px 14px}
+.toolrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.toolrow .btn[aria-pressed="true"]{background:var(--ink,#20262E);color:#fff;border-color:transparent}
 
 /* dialogs + toasts */
 dialog{border:1px solid var(--line);border-radius:8px;padding:18px 20px;max-width:440px;color:var(--ink)}
@@ -216,6 +219,17 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
           <label class="f">Gamma<input id="igamma" type="range" min="0.3" max="3" step="0.05" value="1"></label>
           <label class="chk" style="align-self:end"><input type="checkbox" id="iinvert"> Invert</label>
         </div>
+        <div class="toolrow">
+          <button class="btn small" id="ibgRemove" title="Remove the plain background around the subject (works from the picture's edges)">Remove background</button>
+          <button class="btn small" id="iwand" title="Click an area of the picture to remove it and everything connected of a similar colour">Remove area</button>
+          <button class="btn small" id="ierase" title="Brush over the picture to erase">Eraser</button>
+          <button class="btn small" id="irestore" title="Brush over erased parts to bring them back">Restore</button>
+          <button class="btn small" id="imaskReset" title="Bring back the whole picture">Reset</button>
+        </div>
+        <div class="grid2" style="margin-top:8px">
+          <label class="f" title="How different a colour can be and still count as background">Colour match<input id="itol" type="range" min="5" max="150" value="45"></label>
+          <label class="f">Brush size (mm)<input id="ibrush" type="number" min="0.5" max="100" step="0.5" value="5"></label>
+        </div>
       </div>
     </div>
   </section>
@@ -317,7 +331,7 @@ const r3 = v => Math.round(v * 1000) / 1000;
 function snapshot(){ history.push(JSON.stringify(D)); if (history.length > 80) history.shift(); future = []; autosave(); }
 function undo(){ if (!history.length) return; future.push(JSON.stringify(D)); D = JSON.parse(history.pop()); afterLoad(); }
 function redo(){ if (!future.length) return; history.push(JSON.stringify(D)); D = JSON.parse(future.pop()); afterLoad(); }
-function afterLoad(){ if (sel && !obj(sel)) sel = null; rotaryUI(); for (const o of D.objects) if (o.type === "image") ensureImage(o); render(); inspector(); autosave(); }
+function afterLoad(){ if (sel && !obj(sel)) sel = null; rotaryUI(); for (const o of D.objects) if (o.type === "image"){ if (imgCache.has(o.id)) processImage(o); else ensureImage(o); } render(); inspector(); autosave(); }
 const obj = id => D.objects.find(o => o.id === id);
 
 function autosave(){ try { localStorage.setItem("p2s.design", JSON.stringify(D, (k, v) => k === "_outline" ? undefined : v)); } catch(e) {} }
@@ -393,6 +407,10 @@ function render(){
     el("circle", {cx:head.x, cy:head.y, r:k * 6, fill:"none", stroke:c, "stroke-width":k * 2}, g);
     el("path", {d:`M${head.x - k * 12} ${head.y}H${head.x - k * 3}M${head.x + k * 3} ${head.y}H${head.x + k * 12}M${head.x} ${head.y - k * 12}V${head.y - k * 3}M${head.x} ${head.y + k * 3}V${head.y + k * 12}`, stroke:c, "stroke-width":k * 1.6}, g);
   }
+  if (brushAt && (tool === "erase" || tool === "restore")){
+    const r = (parseFloat(F("ibrush").value) || 5) / 2;
+    el("circle", {cx:brushAt.x, cy:brushAt.y, r, fill:"none", stroke:tool === "erase" ? "#CF3B2B" : "#2E8B57", "stroke-width":px() * 1.5, "pointer-events":"none"}, svg);
+  }
   if (measureMark) el("circle", {cx:measureMark.x, cy:measureMark.y, r:px() * 7, fill:"none", stroke:"#E0A100", "stroke-width":px() * 2.5}, svg);
 }
 
@@ -466,7 +484,8 @@ function drawObject(o){
     }
   } else if (o.type === "image"){
     const pc = procCache.get(o.id);
-    el("rect", {width:o.w, height:o.h, fill:"#fff"}, g);
+    // only the parts that burn are drawn; the rest of the picture box is see-through
+    el("rect", {width:o.w, height:o.h, fill:"transparent", stroke:"rgba(46,139,87,.55)", "stroke-width":px(), "stroke-dasharray":`${px() * 4} ${px() * 3}`}, g);
     if (pc && pc.url) el("image", {href:pc.url, width:o.w, height:o.h, preserveAspectRatio:"none", style:"image-rendering:pixelated"}, g);
     el("rect", {width:o.w, height:o.h, fill:"none", stroke:col, "stroke-width":sw, "vector-effect":"non-scaling-stroke"}, g);
   }
@@ -492,6 +511,17 @@ svg.addEventListener("pointerdown", ev => {
   const p = screenToMm(ev), handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
   if (ev.button === 1 || spaceDown){ drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}}; return; }
   if (tool === "measure"){ doMeasure(p.x, p.y); return; }
+  if (tool === "erase" || tool === "restore" || tool === "wand"){
+    const o = obj(sel);
+    if (!o || o.type !== "image"){ setTool("select"); return; }
+    const q = toImagePx(o, p);
+    if (!q) return;
+    snapshot();
+    if (tool === "wand"){ removeArea(o, [[q.x, q.y]]); return; }
+    drag = {kind:"paint", o, last:q};
+    paintMask(o, q, q, tool === "erase");
+    return;
+  }
   if (tool === "goto"){ setTool("select"); headCmd({action:"move", x:r3(p.x), y:r3(p.y), pointer:true}); return; }
   if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
   if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
@@ -511,6 +541,11 @@ svg.addEventListener("pointermove", ev => {
   if (!drag) return;
   const p = screenToMm(ev);
   if (drag.kind === "pan"){ const k = px(); view = {...drag.v, x: drag.v.x - (ev.clientX - drag.sx) * k, y: drag.v.y - (ev.clientY - drag.sy) * k}; applyView(); render(); return; }
+  if (drag.kind === "paint"){
+    const q = toImagePx(drag.o, p, true);
+    paintMask(drag.o, drag.last, q, tool === "erase"); drag.last = q;
+    brushAt = p; maskChangedSoon(drag.o); return;
+  }
   if (drag.kind === "wrap"){
     const o = drag.o, w = o.text.wrap; let a = (Math.atan2(p.y - drag.c[1], p.x - drag.c[0]) - drag.a0) * 180 / Math.PI;
     a = ((a + 540) % 360) - 180; w.shift = Math.round((drag.shift0 + (w.side === "inside" ? -a : a)) * 10) / 10; drag.moved = true;
@@ -547,6 +582,7 @@ svg.addEventListener("pointermove", ev => {
 svg.addEventListener("pointerup", ev => {
   if (!drag) return;
   const d = drag; drag = null;
+  if (d.kind === "paint"){ commitMask(d.o); return; }
   if (d.kind === "draw" && tool === "line"){
     if (Math.hypot(d.x1 - d.x0, d.y1 - d.y0) > 1){ snapshot(); const o = makeLine(d.x0, d.y0, d.x1, d.y1); D.objects.push(o); sel = o.id; }
     setTool("select"); inspector(); render(); estimate(); autosave(); return;
@@ -572,6 +608,8 @@ svg.addEventListener("pointerup", ev => {
   if (d.kind === "wrap" && d.moved){ rewrapSoon(d.o); inspector(); estimate(); autosave(); }
   render();
 });
+svg.addEventListener("pointermove", ev => { if (tool === "erase" || tool === "restore"){ brushAt = screenToMm(ev); if (!drag) render(); } });
+svg.addEventListener("pointerleave", () => { if (brushAt){ brushAt = null; render(); } });
 svg.addEventListener("wheel", ev => { ev.preventDefault(); const p = screenToMm(ev); zoom(ev.deltaY > 0 ? 1.15 : 1 / 1.15, p.x, p.y); }, {passive:false});
 $("#zIn").onclick = () => zoom(1 / 1.3); $("#zOut").onclick = () => zoom(1.3); $("#zFit").onclick = fitView;
 
@@ -598,8 +636,11 @@ const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom
   text:"Click on the bed where the text should go",
   line:"Drag to draw a line (Shift snaps to 45°)", shape:"Drag on the bed to draw a shape (Shift keeps it even). Change the shape on the right.", measure:"Click the spot on the material to measure. The head moves so its height sensor (right of the laser) is over it.",
   goto:"Click where the head should go; the red pointer turns on there",
+  erase:"Brush over the picture to erase. Esc when done", restore:"Brush over erased parts to bring them back. Esc when done",
+  wand:"Click an area of the picture to remove it (and everything connected of a similar colour)",
   rotline:"Click the top line of the object (where the laser should touch it first)"};
-function setTool(t){ tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
+function setTool(t){ tool = t; brushAt = null;
+  for (const [id, k] of [["ierase","erase"],["irestore","restore"],["iwand","wand"]]){ const b = F(id); if (b) b.setAttribute("aria-pressed", t === k); } for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
 
 // ---------------------------------------------------------------- inspector
@@ -843,6 +884,95 @@ F("imgFile").onchange = async () => {
   imgCache.set(o.id, im); D.objects.push(o); sel = o.id; await processImage(o); inspector(); render(); estimate();
 };
 function loadImg(url){ return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Couldn't read that picture")); i.src = url; }); }
+// ---------------------------------------------------------------- picture masks (eraser / background)
+// A mask is a transparent PNG the size of the picture (at most 1024 px on the long side):
+// opaque = keep, transparent = removed. It is saved with the project as o.mask.
+const maskCache = new Map();          // id -> {src, canvas}
+let brushAt = null;
+function maskSize(im){ const k = Math.min(1, 1024 / Math.max(im.naturalWidth || im.width, im.naturalHeight || im.height)); return [Math.max(1, Math.round((im.naturalWidth || im.width) * k)), Math.max(1, Math.round((im.naturalHeight || im.height) * k))]; }
+async function getMask(o){
+  if (!o.mask){ maskCache.delete(o.id); return null; }
+  const c = maskCache.get(o.id);
+  if (c && c.src === o.mask) return c.canvas;
+  const im = await loadImg(o.mask), cv = document.createElement("canvas"); cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+  cv.getContext("2d").drawImage(im, 0, 0); maskCache.set(o.id, {src:o.mask, canvas:cv}); return cv;
+}
+function editMask(o){
+  // the live canvas being edited (created full-opaque the first time)
+  let c = maskCache.get(o.id);
+  if (c && c.canvas && (c.src === o.mask || c.dirty)) return c.canvas;
+  const im = imgCache.get(o.id), [w, h] = maskSize(im), cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const k = cv.getContext("2d");
+  // (getMask, run by processImage, has normally loaded o.mask already; this is the fallback)
+  if (c && c.canvas && o.mask) k.drawImage(c.canvas, 0, 0, w, h); else { k.fillStyle = "#000"; k.fillRect(0, 0, w, h); }
+  maskCache.set(o.id, {src:o.mask, canvas:cv}); return cv;
+}
+// bed point -> mask pixel of picture o (null if outside, unless clampIt)
+function toImagePx(o, p, clampIt){
+  const im = imgCache.get(o.id); if (!im) return null;
+  const [w, h] = maskSize(im), a = -(o.rot || 0) * Math.PI / 180, cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  const lx = (p.x - cx) * Math.cos(a) - (p.y - cy) * Math.sin(a) + o.w / 2, ly = (p.x - cx) * Math.sin(a) + (p.y - cy) * Math.cos(a) + o.h / 2;
+  if (!clampIt && (lx < 0 || ly < 0 || lx > o.w || ly > o.h)) return null;
+  return {x:lx / o.w * w, y:ly / o.h * h};
+}
+function paintMask(o, a, b, erase){
+  const cv = editMask(o), k = cv.getContext("2d"), r = (parseFloat(F("ibrush").value) || 5) / 2 * cv.width / o.w;
+  k.save(); k.globalCompositeOperation = erase ? "destination-out" : "source-over"; k.fillStyle = k.strokeStyle = "#000";
+  k.lineWidth = r * 2; k.lineCap = "round"; k.beginPath(); k.moveTo(a.x, a.y); k.lineTo(b.x + 0.01, b.y); k.stroke(); k.restore();
+  maskCache.get(o.id).dirty = true; maskChangedSoon(o);
+}
+let maskTimer = null;
+function maskChangedSoon(o){ clearTimeout(maskTimer); maskTimer = setTimeout(() => commitMask(o, true), 120); }
+function commitMask(o, quiet){
+  clearTimeout(maskTimer);
+  const c = maskCache.get(o.id); if (!c) return;
+  o.mask = c.canvas.toDataURL("image/png"); c.src = o.mask; c.dirty = false;
+  processImage(o); if (!quiet){ estimate(); autosave(); }
+}
+// remove connected pixels similar in colour to each seed (flood fill on the picture itself)
+function removeArea(o, seeds, silent){
+  const im = imgCache.get(o.id); if (!im) return 0;
+  const cv = editMask(o), w = cv.width, h = cv.height;
+  const sc = document.createElement("canvas"); sc.width = w; sc.height = h;
+  const sx = sc.getContext("2d", {willReadFrequently:true}); sx.drawImage(im, 0, 0, w, h);
+  const src = sx.getImageData(0, 0, w, h).data, mk = cv.getContext("2d"), md = mk.getImageData(0, 0, w, h), m = md.data;
+  const tol = +F("itol").value, tol2 = tol * tol, seen = new Uint8Array(w * h), stack = [];
+  let removed = 0;
+  for (const [fx, fy] of seeds){
+    const x0 = Math.min(w - 1, Math.max(0, Math.round(fx))), y0 = Math.min(h - 1, Math.max(0, Math.round(fy))), i0 = y0 * w + x0;
+    if (seen[i0] || m[i0 * 4 + 3] === 0) continue;
+    const r0 = src[i0 * 4], g0 = src[i0 * 4 + 1], b0 = src[i0 * 4 + 2], a0 = src[i0 * 4 + 3];
+    stack.push(i0); seen[i0] = 1;
+    while (stack.length){
+      const i = stack.pop(), j = i * 4;
+      m[j + 3] = 0; removed++;
+      const x = i % w, y = (i / w) | 0;
+      for (const n of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]){
+        if (n < 0 || seen[n]) continue;
+        const k2 = n * 4;
+        // transparent source pixels always count as background
+        const dr = src[k2] - r0, dg = src[k2 + 1] - g0, db = src[k2 + 2] - b0;
+        if ((src[k2 + 3] < 20 && a0 < 20) || dr * dr + dg * dg + db * db <= tol2){ seen[n] = 1; stack.push(n); }
+      }
+    }
+  }
+  mk.putImageData(md, 0, 0); maskCache.get(o.id).dirty = true; commitMask(o);
+  if (!silent) toast(removed ? "Removed. Undo (Ctrl+Z) if it took too much, or lower Colour match." : "Nothing removed there.");
+  return removed;
+}
+F("ibgRemove").onclick = () => {
+  const o = obj(sel); if (!o || o.type !== "image" || !imgCache.get(o.id)) return;
+  snapshot();
+  const cv = editMask(o), w = cv.width, h = cv.height, seeds = [], step = Math.max(1, Math.round(Math.min(w, h) / 200));
+  for (let x = 0; x < w; x += step){ seeds.push([x, 0], [x, h - 1]); }
+  for (let y = 0; y < h; y += step){ seeds.push([0, y], [w - 1, y]); }
+  const n = removeArea(o, seeds, true);
+  toast(n ? `Background removed (${Math.round(100 * n / (w * h))}% of the picture). Too much or too little? Undo and change Colour match, or touch up with Eraser / Restore.` : "No plain background found at the edges. Try Remove area or the Eraser.");
+};
+const toggleTool = k => () => { const o = obj(sel); if (!o || o.type !== "image") return; setTool(tool === k ? "select" : k); };
+F("iwand").onclick = toggleTool("wand"); F("ierase").onclick = toggleTool("erase"); F("irestore").onclick = toggleTool("restore");
+F("imaskReset").onclick = () => { const o = obj(sel); if (!o || !o.mask) return; snapshot(); delete o.mask; maskCache.delete(o.id); processImage(o); estimate(); autosave(); };
+
 async function ensureImage(o){ if (!imgCache.has(o.id) && o.src){ imgCache.set(o.id, await loadImg(o.src)); processImage(o); } }
 
 const KERNELS = {
@@ -861,7 +991,15 @@ async function processImage(o){
   if (cols * rows > 12e6){ toast("That picture is too large at this line density. Lower the lines per cm or make it smaller.", true); return; }
   const c = document.createElement("canvas"); c.width = cols; c.height = rows;
   const ctx = c.getContext("2d", {willReadFrequently:true}); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cols, rows);
-  ctx.imageSmoothingQuality = "high"; ctx.drawImage(im, 0, 0, cols, rows);
+  ctx.imageSmoothingQuality = "high";
+  const mk = await getMask(o);
+  if (mk){
+    // erased / removed parts become transparent, which burns as nothing (white)
+    const t = document.createElement("canvas"); t.width = cols; t.height = rows;
+    const tc = t.getContext("2d"); tc.imageSmoothingQuality = "high"; tc.drawImage(im, 0, 0, cols, rows);
+    tc.globalCompositeOperation = "destination-in"; tc.drawImage(mk, 0, 0, cols, rows);
+    ctx.drawImage(t, 0, 0);
+  } else ctx.drawImage(im, 0, 0, cols, rows);
   const id = ctx.getImageData(0, 0, cols, rows), d = id.data, a = o.adj || {};
   const g = new Float32Array(cols * rows);
   const br = (a.brightness || 0) * 2.55, ct = (a.contrast || 0), cf = (259 * (ct + 255)) / (255 * (259 - ct)), gm = a.gamma || 1;
@@ -888,7 +1026,8 @@ async function processImage(o){
   const lo = (o.op.min_power || 0) / Math.max(o.op.power || 1, 1);
   for (let i = 0, j = 0; i < out.length; i++, j += 4){
     const burn = mode === "grayscale" ? (out[i] >= 255 ? 0 : lo + (1 - lo) * (255 - out[i]) / 255) : (out[i] < 128 ? 1 : 0);
-    d[j] = 238 - burn * 175; d[j + 1] = 222 - burn * 170; d[j + 2] = 190 - burn * 150; d[j + 3] = 255;
+    // burned pixels in wood-burn browns; untouched ones transparent, so only what burns shows
+    d[j] = 238 - burn * 175; d[j + 1] = 222 - burn * 170; d[j + 2] = 190 - burn * 150; d[j + 3] = burn > 0 ? 255 : 0;
   }
   ctx.putImageData(id, 0, 0);
   procCache.set(o.id, {cols, rows, data:out, url:c.toDataURL()});
@@ -954,7 +1093,7 @@ function importSVG(text, name){
 function payload(){
   const objs = [];
   for (const o of D.objects){
-    const c = {...o}; delete c._outline; delete c.src; delete c.adj; delete c.name;
+    const c = {...o}; delete c._outline; delete c.src; delete c.adj; delete c.name; delete c.mask;
     if (o.type === "image"){ const pc = procCache.get(o.id); if (!pc) throw new Error("A picture is still being prepared. Try again in a moment."); c.image = {cols:pc.cols, rows:pc.rows, data:b64(pc.data)}; }
     objs.push(c);
   }
