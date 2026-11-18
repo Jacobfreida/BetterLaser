@@ -55,6 +55,10 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
   it wraps each way, so you line up the object's centre line with the laser instead of guessing
   from the top edge as Studio does. *Line up by: Edge* keeps Studio's behaviour. One full turn is
   shown on the bed. Rotary projects from Studio (.xcs) import with their settings.
+- **Magnetic snap:** the magnet button by the zoom controls turns snapping on and off, with a
+  grid size of 1–25 mm. While moving, drawing or resizing, objects snap to other objects' edges
+  and centres and to the bed's edges and centre (a pink guide line shows the match), otherwise
+  to the grid. Hold Alt to move freely. The setting is remembered.
 - **Laser head (crosshair button on the left):** a pop-out panel to jog the head (0.5–50 mm steps), send it home, switch the red pointer
   on/off, or click *Move to a point* and then the bed. *Show job start* parks the red pointer
   where the job will begin; *Trace job outline* runs it round the area the job covers, so you
