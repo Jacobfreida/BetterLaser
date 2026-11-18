@@ -55,6 +55,11 @@ button{cursor:pointer}
 #bed{width:100%;height:100%;display:block;touch-action:none;user-select:none}
 #hint{position:absolute;left:12px;bottom:10px;color:#C9CED3;font-size:13px;pointer-events:none}
 #zoomctl{position:absolute;right:10px;bottom:10px;display:flex;gap:4px}
+#snapctl{display:inline-flex;gap:4px;margin-right:8px}
+#zSnap{display:inline-grid;place-items:center}
+#zSnap[aria-pressed="true"]{background:#2F6FD6 !important;color:#fff;border-color:#2F6FD6 !important}
+#zGrid{height:30px;border:1px solid var(--line);border-radius:var(--radius);background:rgba(246,247,248,.92);font:inherit;font-size:12px;padding:0 4px}
+#zGrid:disabled{opacity:.55}
 #zoomctl button{background:rgba(246,247,248,.92);border:1px solid var(--line);border-radius:var(--radius);width:32px;height:30px}
 #camctl{position:absolute;right:10px;top:10px;background:rgba(246,247,248,.94);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;display:none;gap:8px;align-items:center;font-size:13px}
 #camctl.on{display:flex}
@@ -174,7 +179,7 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
       </details>
   </div>
   <div id="hint"></div>
-  <div id="zoomctl"><button id="zIn" aria-label="Zoom in">+</button><button id="zOut" aria-label="Zoom out">−</button><button id="zFit" aria-label="Fit bed" title="Fit bed">⤢</button></div>
+  <div id="zoomctl"><span id="snapctl"><button id="zSnap" aria-pressed="false" title="Magnetic snap: to the grid, other objects' edges and centres, and the bed (hold Alt to move freely)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 7h4M14 7h4"/></svg></button><select id="zGrid" aria-label="Snap grid size" title="Snap grid size"><option value="1">1 mm</option><option value="2">2 mm</option><option value="5" selected>5 mm</option><option value="10">10 mm</option><option value="25">25 mm</option></select></span><button id="zIn" aria-label="Zoom in">+</button><button id="zOut" aria-label="Zoom out">−</button><button id="zFit" aria-label="Fit bed" title="Fit bed">⤢</button></div>
 </main>
 
 <aside id="side">
@@ -397,8 +402,10 @@ function render(){
   for (let x = 0; x <= BED_W; x += 100){ const t = el("text", {x, y:-px() * 5, "text-anchor":"middle"}, lab); t.textContent = x; }
   for (let y = 100; y <= BED_H; y += 100){ const t = el("text", {x:-px() * 6, y:y + px() * 4, "text-anchor":"end"}, lab); t.textContent = y; }
 
+  drawSnapGrid();
   drawRotary();
   for (const o of D.objects) drawObject(o);
+  drawGuides();
   if (sel && obj(sel)) drawSelection(obj(sel));
   if (drag && drag.kind === "draw" && tool === "line") el("line", {x1:drag.x0, y1:drag.y0, x2:drag.x1, y2:drag.y1, stroke:"#fff", "stroke-width":px() * 1.5, "stroke-dasharray":`${px() * 4} ${px() * 3}`}, svg);
   else if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
@@ -508,7 +515,7 @@ let drag = null, spaceDown = false, measureMark = null;
 let head = {known:false, x:0, y:0, pointer:false};
 svg.addEventListener("pointerdown", ev => {
   svg.setPointerCapture(ev.pointerId);
-  const p = screenToMm(ev), handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
+  let p = screenToMm(ev); const handle = ev.target.getAttribute && ev.target.getAttribute("data-handle");
   if (ev.button === 1 || spaceDown){ drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}}; return; }
   if (tool === "measure"){ doMeasure(p.x, p.y); return; }
   if (tool === "erase" || tool === "restore" || tool === "wand"){
@@ -524,7 +531,7 @@ svg.addEventListener("pointerdown", ev => {
   }
   if (tool === "goto"){ setTool("select"); headCmd({action:"move", x:r3(p.x), y:r3(p.y), pointer:true}); return; }
   if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
-  if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
+  if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ if (snapOn(ev)) p = snapPt(p); guides = []; drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
   if (tool === "text"){ addText(p.x, p.y); setTool("select"); return; }
   if (handle && sel){ const o = obj(sel); snapshot(); drag = {kind: handle === "rot" ? "rot" : "resize", handle, o, start:clone(o), p0:p}; return; }
   const gEl = ev.target.closest && ev.target.closest("[data-id]");
@@ -539,7 +546,8 @@ svg.addEventListener("pointerdown", ev => {
 });
 svg.addEventListener("pointermove", ev => {
   if (!drag) return;
-  const p = screenToMm(ev);
+  let p = screenToMm(ev);
+  if (drag && drag.kind === "draw"){ if (snapOn(ev)) p = snapPt(p); else guides = []; }
   if (drag.kind === "pan"){ const k = px(); view = {...drag.v, x: drag.v.x - (ev.clientX - drag.sx) * k, y: drag.v.y - (ev.clientY - drag.sy) * k}; applyView(); render(); return; }
   if (drag.kind === "paint"){
     const q = toImagePx(drag.o, p, true);
@@ -561,12 +569,15 @@ svg.addEventListener("pointermove", ev => {
   if (drag.kind === "move"){
     // a click with a tiny wobble isn't a move (and shouldn't cost an undo step)
     if (!drag.moved && Math.hypot(p.x - drag.p0.x, p.y - drag.p0.y) < px() * 3) return;
-    o.x = r3(drag.start.x + p.x - drag.p0.x); o.y = r3(drag.start.y + p.y - drag.p0.y); drag.moved = true; render(); inspectorValues(); return;
+    let nx = drag.start.x + p.x - drag.p0.x, ny = drag.start.y + p.y - drag.p0.y;
+    if (snapOn(ev)) [nx, ny] = snapMove(o, nx, ny); else guides = [];
+    o.x = r3(nx); o.y = r3(ny); drag.moved = true; render(); inspectorValues(); return;
   }
   if (drag.kind === "rot"){ const cx = o.x + o.w / 2, cy = o.y + o.h / 2; let a = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90; if (ev.shiftKey) a = Math.round(a / 15) * 15; o.rot = Math.round(((a % 360) + 360) % 360 * 10) / 10; render(); inspectorValues(); return; }
   if (drag.kind === "resize"){
     const s = drag.start, a = (s.rot || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
     const cx = s.x + s.w / 2, cy = s.y + s.h / 2;
+    if (snapOn(ev) && !(s.rot % 360)) p = snapPt(p, o.id); else guides = [];
     const lx = (p.x - cx) * ca + (p.y - cy) * sa, ly = -(p.x - cx) * sa + (p.y - cy) * ca;   // pointer in object frame
     const h = drag.handle, ax = h.includes("w") ? s.w / 2 : -s.w / 2, ay = h.includes("n") ? s.h / 2 : -s.h / 2;  // fixed opposite corner
     let w = Math.max(0.5, Math.abs(lx - ax)), hh = Math.max(0.5, Math.abs(ly - ay));
@@ -580,6 +591,7 @@ svg.addEventListener("pointermove", ev => {
   }
 });
 svg.addEventListener("pointerup", ev => {
+  if (guides.length){ guides = []; requestAnimationFrame(render); }
   if (!drag) return;
   const d = drag; drag = null;
   if (d.kind === "paint"){ commitMask(d.o); return; }
@@ -782,6 +794,67 @@ for (const id of ["skind","ssides","sinner","sradius"]) F(id).addEventListener("
 for (const id of ["ibright","icontrast","igamma","iinvert"]) F(id).addEventListener(id === "iinvert" ? "change" : "input", () => {
   const o = obj(sel); if (!o) return; o.adj = {brightness:+F("ibright").value, contrast:+F("icontrast").value, gamma:+F("igamma").value, invert:F("iinvert").checked}; processImage(o);
 });
+
+// ---------------------------------------------------------------- magnetic snap
+// When on, moving, drawing and resizing snap to other objects' edges and centres and to the
+// bed's edges and centre (within a few screen pixels, with a guide line), otherwise to the
+// grid. Hold Alt to move freely. Remembered per browser.
+let snap = {on:false, grid:5}, guides = [];
+try { Object.assign(snap, JSON.parse(localStorage.getItem("p2s.snap") || "{}")); } catch(e){}
+function snapUI(){
+  F("zSnap").setAttribute("aria-pressed", snap.on); F("zGrid").value = String(snap.grid); F("zGrid").disabled = !snap.on;
+  try { localStorage.setItem("p2s.snap", JSON.stringify(snap)); } catch(e){}
+}
+F("zSnap").onclick = () => { snap.on = !snap.on; snapUI(); render(); toast(snap.on ? `Snap on: ${snap.grid} mm grid and other objects. Hold Alt to move freely.` : "Snap off."); };
+F("zGrid").onchange = () => { snap.grid = +F("zGrid").value || 5; snapUI(); render(); };
+const snapOn = ev => snap.on && !(ev && ev.altKey);
+function bboxOf(o){
+  // axis-aligned box of a (possibly rotated) object
+  const a = (o.rot || 0) * Math.PI / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+  const w = o.w * c + o.h * s, h = o.w * s + o.h * c, cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  return {x0:cx - w / 2, x1:cx + w / 2, y0:cy - h / 2, y1:cy + h / 2, cx, cy};
+}
+function snapTargets(skip){
+  const xs = [0, BED_W / 2, BED_W], ys = [0, BED_H / 2, BED_H];
+  for (const t of D.objects){ if (t.id === skip) continue; const b = bboxOf(t); xs.push(b.x0, b.cx, b.x1); ys.push(b.y0, b.cy, b.y1); }
+  return {xs, ys};
+}
+// best shift (within thr) that puts one of `vals` on one of `targets`
+function nearest(vals, targets, thr){
+  let best = null;
+  for (const v of vals) for (const t of targets){ const d = t - v; if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = {d, at:t}; }
+  return best;
+}
+function snapMove(o, nx, ny){
+  const thr = px() * 7, b = bboxOf({...o, x:nx, y:ny}), T = snapTargets(o.id), g = snap.grid;
+  guides = [];
+  const sx = nearest([b.x0, b.cx, b.x1], T.xs, thr), sy = nearest([b.y0, b.cy, b.y1], T.ys, thr);
+  if (sx){ nx += sx.d; guides.push({x:sx.at}); } else nx += Math.round(b.x0 / g) * g - b.x0;
+  if (sy){ ny += sy.d; guides.push({y:sy.at}); } else ny += Math.round(b.y0 / g) * g - b.y0;
+  return [nx, ny];
+}
+function snapPt(p, skip){
+  const thr = px() * 7, T = snapTargets(skip), g = snap.grid;
+  guides = [];
+  const sx = nearest([p.x], T.xs, thr), sy = nearest([p.y], T.ys, thr);
+  const x = sx ? sx.at : Math.round(p.x / g) * g, y = sy ? sy.at : Math.round(p.y / g) * g;
+  if (sx) guides.push({x}); if (sy) guides.push({y});
+  return {x, y};
+}
+function drawSnapGrid(){
+  if (!snap.on) return;
+  const g = snap.grid, k = px();
+  if (g / k < 6) return;                          // too dense to see at this zoom
+  const gr = el("g", {stroke: cam.visible ? "rgba(255,255,255,.22)" : "rgba(47,111,214,.16)", "stroke-width":k, "pointer-events":"none"}, svg);
+  for (let x = g; x < BED_W; x += g) if (x % 50) el("line", {x1:x, y1:0, x2:x, y2:BED_H}, gr);
+  for (let y = g; y < BED_H; y += g) if (y % 50) el("line", {x1:0, y1:y, x2:BED_W, y2:y}, gr);
+}
+function drawGuides(){
+  if (!guides.length) return;
+  const gr = el("g", {stroke:"#E5389B", "stroke-width":px() * 1.2, "stroke-dasharray":`${px() * 5} ${px() * 3}`, "pointer-events":"none"}, svg);
+  for (const q of guides) q.x !== undefined ? el("line", {x1:q.x, y1:view.y, x2:q.x, y2:view.y + view.h}, gr) : el("line", {x1:view.x, y1:q.y, x2:view.x + view.w, y2:q.y}, gr);
+}
+snapUI();
 
 // ---------------------------------------------------------------- shapes, lines and wrapped text
 const SHAPE_DEFAULT = {kind:"polygon", sides:6, inner:45, radius:5};
