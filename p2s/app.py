@@ -372,7 +372,7 @@ def xcs_to_design(doc: dict) -> dict:
             objs.append({"id": d["id"], "type": t, "x": cx - w / 2, "y": cy - h / 2, "w": w,
                          "h": h, "rot": ang,
                          "op": {"mode": mode, "power": p.get("power", 10), "speed": p.get("speed", 100),
-                                "passes": p.get("repeat", 1), "air": p.get("airPump", 25),
+                                "passes": p.get("repeat", 1), "air": p.get("airPump", 100),
                                 "density": p.get("density", 100)}})
         out = {"focal": cfg.get("focalLength"), "fan_gear": cfg.get("fanGear", 3),
                "purifier_gear": cfg.get("purifierGear", 4), "objects": objs, "skipped": skipped}

@@ -243,7 +243,7 @@ def build_job(design: dict) -> Job:
             raise DesignError(f"unknown mode {mode}")
         e = Element(id=str(o.get("id", "")), shape=o["type"], processing_type=PROC[mode],
                     power=float(op.get("power", 0)), speed=float(op.get("speed", 0)),
-                    passes=int(op.get("passes", 1)), air=float(op.get("air", 25)),
+                    passes=int(op.get("passes", 1)), air=float(op.get("air", 100)),
                     density=float(op.get("density", 100)), scan=op.get("scan", "zMode"))
         if mode == "image":
             if o["type"] != "image":
