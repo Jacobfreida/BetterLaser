@@ -20,6 +20,9 @@ html,body{margin:0;height:100%}
 body{display:grid;grid-template-rows:auto 1fr;grid-template-columns:56px 1fr 330px;grid-template-areas:"bar bar bar" "rail stage side";height:100vh;overflow:hidden;font-size:14px}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
+/* with a placing tool (measure, move head, draw, eraser...) the crosshair wins over the
+   move/resize cursors that objects and their handles show in Select mode */
+#bed:not([data-tool="select"]) [data-id], #bed:not([data-tool="select"]) [data-handle]{cursor:inherit !important}
 :focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 
 /* machine bar */
@@ -98,6 +101,10 @@ input[type=range]{width:100%}
 .focusrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 #imgprev{width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:var(--radius);max-height:150px;object-fit:contain;
   background:repeating-conic-gradient(#e6e8eb 0 25%,#fff 0 50%) 0 0/14px 14px}
+.matrow{display:flex;gap:6px;align-items:flex-end;margin-bottom:10px}
+.matlist{list-style:none;margin:8px 0 0;padding:0;max-height:320px;overflow:auto}
+.matlist li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.matlist b{display:block}.matlist small{color:var(--muted,#6B7580)}
 .toolrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .toolrow .btn[aria-pressed="true"]{background:var(--ink,#20262E);color:#fff;border-color:transparent}
 
@@ -145,7 +152,7 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 </nav>
 
 <main id="stage">
-  <svg id="bed" xmlns="http://www.w3.org/2000/svg"></svg>
+  <svg id="bed" data-tool="select" xmlns="http://www.w3.org/2000/svg"></svg>
   <div id="camctl">
     <span>Camera</span>
     <input type="range" id="camOpacity" min="0.1" max="1" step="0.05" value="0.9" aria-label="Camera opacity" style="width:90px">
@@ -195,6 +202,7 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
         <label class="f">Rotation (°)<input id="frot" type="number" step="1"></label>
         <label class="chk" style="align-self:end;padding-bottom:7px"><input type="checkbox" id="flock" checked> Keep proportions</label>
       </div>
+      <button class="btn small" id="offsetBtn" style="margin-top:10px" title="Make a new outline a set distance outside or inside this shape, around the same centre">Offset outline…</button>
       <div id="shapeFields" class="hidden grid2" style="margin-top:12px">
         <label class="f">Shape<select id="skind"><option value="polygon">Polygon</option><option value="star">Star</option><option value="rounded">Rounded rectangle</option><option value="heart">Heart</option></select></label>
         <label class="f" id="ssidesF"><span id="ssidesLbl">Sides</span><input id="ssides" type="number" min="3" max="40" step="1"></label>
@@ -241,6 +249,11 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
   <section id="laserSec" class="hidden">
     <h2>Laser</h2>
+    <div class="matrow">
+      <label class="f" style="flex:1;min-width:0">Material<select id="lmat"></select></label>
+      <button class="btn small" id="matSave" title="Save these settings to a material profile">Save…</button>
+      <button class="btn small" id="matManage" title="Rename, delete, export or import material profiles">Manage…</button>
+    </div>
     <div class="modes" id="modes" role="group" aria-label="Laser operation">
       <button data-m="score">Score</button><button data-m="cut">Cut</button><button data-m="fill">Fill</button><button data-m="image">Image</button><button data-m="off">Off</button>
     </div>
@@ -305,10 +318,10 @@ const BED_W = 600, BED_H = 305, CAM_W = 610;
 const OPS = {score:"Score",cut:"Cut",fill:"Fill",image:"Image",off:"Off"};
 const OPCOL = {score:"#2F6FD6",cut:"#CF3B2B",fill:"#7A4FD0",image:"#2E8B57",off:"#8A949E"};
 const DEFAULT_OP = {
-  score:{power:15,speed:150,passes:1,air:25},
+  score:{power:15,speed:150,passes:1,air:100},
   cut:{power:80,speed:15,passes:1,air:100},
-  fill:{power:20,speed:250,passes:1,air:25,density:100},
-  image:{power:30,min_power:0,speed:250,passes:1,air:25,density:100,image_mode:"grayscale"},
+  fill:{power:20,speed:250,passes:1,air:100,density:100},
+  image:{power:30,min_power:0,speed:250,passes:1,air:100,density:100,image_mode:"grayscale"},
 };
 
 // ---------------------------------------------------------------- state
@@ -652,7 +665,7 @@ const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom
   wand:"Click an area of the picture to remove it (and everything connected of a similar colour)",
   rotline:"Click the top line of the object (where the laser should touch it first)"};
 function setTool(t){ tool = t; brushAt = null;
-  for (const [id, k] of [["ierase","erase"],["irestore","restore"],["iwand","wand"]]){ const b = F(id); if (b) b.setAttribute("aria-pressed", t === k); } for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; }
+  for (const [id, k] of [["ierase","erase"],["irestore","restore"],["iwand","wand"]]){ const b = F(id); if (b) b.setAttribute("aria-pressed", t === k); } for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", b.dataset.tool === t); $("#hint").textContent = HINTS[t] || ""; svg.style.cursor = t === "select" ? "default" : "crosshair"; svg.setAttribute("data-tool", t); }
 for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setTool(b.dataset.tool);
 
 // ---------------------------------------------------------------- inspector
@@ -660,10 +673,11 @@ const F = id => document.getElementById(id);
 function inspector(){
   const o = sel && obj(sel);
   $("#objEmpty").classList.toggle("hidden", !!o); $("#objFields").classList.toggle("hidden", !o); $("#laserSec").classList.toggle("hidden", !o);
-  $("#objTitle").textContent = o ? (o.shape ? {line:"Line", polygon:"Polygon", star:"Star", rounded:"Rounded rectangle", heart:"Heart"}[o.shape.kind] : {rect:"Rectangle", ellipse:"Ellipse", text:isWrapped(o) ? "Wrapped text" : "Text", image:"Picture", path:"Imported shape"}[o.type]) : "Nothing selected";
+  $("#objTitle").textContent = o ? (o.shape ? {line:"Line", polygon:"Polygon", star:"Star", rounded:"Rounded rectangle", heart:"Heart"}[o.shape.kind] : {rect:"Rectangle", ellipse:"Ellipse", text:isWrapped(o) ? "Wrapped text" : "Text", image:"Picture", path:(o.name && o.name.startsWith("Offset")) ? "Offset outline (" + o.name.slice(7) + ")" : "Imported shape"}[o.type]) : "Nothing selected";
   if (!o) return;
   $("#textFields").classList.toggle("hidden", o.type !== "text"); $("#imgFields").classList.toggle("hidden", o.type !== "image");
   $("#shapeFields").classList.toggle("hidden", !o.shape || o.shape.kind === "line");
+  F("offsetBtn").classList.toggle("hidden", o.type === "image");
   if (o.shape && o.shape.kind !== "line"){
     const k = o.shape.kind; F("skind").value = k; F("ssides").value = o.shape.sides; F("sinner").value = o.shape.inner; F("sradius").value = o.shape.radius;
     F("ssidesF").classList.toggle("hidden", !(k === "polygon" || k === "star")); F("ssidesLbl").textContent = k === "star" ? "Points" : "Sides";
@@ -695,7 +709,8 @@ function inspectorValues(){
   const op = o.op, m = op.mode;
   // never overwrite the field the user is typing in
   const put = (id, v) => { if (document.activeElement !== F(id)) F(id).value = v; };
-  put("lpower", op.power ?? ""); put("lspeed", op.speed ?? ""); put("lpasses", op.passes ?? 1); put("lair", op.air ?? 25);
+  matSelect(o);
+  put("lpower", op.power ?? ""); put("lspeed", op.speed ?? ""); put("lpasses", op.passes ?? 1); put("lair", op.air ?? 100);
   put("ldensity", op.density ?? 100); put("lminpower", op.min_power ?? 0); F("lbidir").checked = (op.scan || "zMode") === "zMode";
   F("imode").value = op.image_mode === "dither" ? (op.dither || "Jarvis") : (op.image_mode === "threshold" ? "threshold" : "grayscale");
   const raster = m === "fill" || m === "image", gray = m === "image" && F("imode").value === "grayscale";
@@ -746,8 +761,10 @@ F("lbidir").onchange = () => { const o = obj(sel); snapshot(); o.op.scan = F("lb
 F("imode").onchange = () => { const o = obj(sel); snapshot(); const v = F("imode").value; if (v === "grayscale") o.op.image_mode = "grayscale"; else if (v === "threshold") o.op.image_mode = "threshold"; else { o.op.image_mode = "dither"; o.op.dither = v; } processImage(o); inspectorValues(); };
 for (const b of document.querySelectorAll("#modes button")) b.onclick = () => {
   const o = obj(sel); if (!o || b.disabled) return; snapshot(); const m = b.dataset.m;
-  const keep = {...o.op}; o.op = m === "off" ? {...keep, mode:"off"} : {...DEFAULT_OP[m], ...(keep.mode === m || keep.mode === "off" ? keep : {}), mode:m};
-  render(); inspector(); estimate();
+  const keep = {...o.op}, prof = o.material && (materials[o.material] || {})[m];
+  o.op = m === "off" ? {...keep, mode:"off"} : prof ? {...DEFAULT_OP[m], ...prof, mode:m} : {...DEFAULT_OP[m], ...(keep.mode === m || keep.mode === "off" ? keep : {}), mode:m};
+  if (o.type === "image" && m === "image") processImage(o);
+  render(); inspector(); estimate(); autosave();
 };
 let textTimer = null;
 for (const id of ["ttext","tsize","talign","tfont"]) F(id).addEventListener(id === "ttext" ? "input" : "change", () => {
@@ -855,6 +872,229 @@ function drawGuides(){
   for (const q of guides) q.x !== undefined ? el("line", {x1:q.x, y1:view.y, x2:q.x, y2:view.y + view.h}, gr) : el("line", {x1:view.x, y1:q.y, x2:view.x + view.w, y2:q.y}, gr);
 }
 snapUI();
+// ---------------------------------------------------------------- offset outline
+// The shape is painted onto an off-screen canvas (at up to 20 px/mm), grown with a stroke of
+// twice the distance or shrunk by erasing one, and the edge is traced back out (marching
+// squares on the antialiased alpha, so sub-pixel accurate) and simplified. That handles any
+// outline: concave shapes, text, holes and overlaps, and turns a line into a rounded slot.
+function objectLoops(o){
+  // the object's outlines in bed mm, as [{pts, closed}]
+  const a = (o.rot || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  const T = (lx, ly) => { const dx = lx - o.w / 2, dy = ly - o.h / 2; return [cx + dx * ca - dy * sa, cy + dx * sa + dy * ca]; };
+  if (o.type === "rect") return [{closed:true, pts:[[0,0],[o.w,0],[o.w,o.h],[0,o.h]].map(([x, y]) => T(x, y))}];
+  if (o.type === "ellipse"){ const n = 360, pts = []; for (let i = 0; i < n; i++){ const t = 2 * Math.PI * i / n; pts.push(T(o.w / 2 + o.w / 2 * Math.cos(t), o.h / 2 + o.h / 2 * Math.sin(t))); } return [{closed:true, pts}]; }
+  const paths = o.type === "text" ? o._outline && o._outline.paths : o.paths, nw = o.type === "text" ? o._outline && o._outline.nat_w : o.nat_w, nh = o.type === "text" ? o._outline && o._outline.nat_h : o.nat_h;
+  if (!paths) return [];
+  const sx = o.w / (nw || o.w), sy = o.h / (nh || o.h);
+  return paths.filter(p => p.length > 1).map(p => {
+    const f = p[0], l = p[p.length - 1], closed = p.length > 2 && Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6;
+    return {closed, pts:p.map(([x, y]) => T(x * sx, y * sy))};
+  });
+}
+function offsetLoops(items, d, sharp){
+  // sharp corners are kept up to a miter of 4× the distance (very pointy tips get cut flat,
+  // like most CAD offsets), so leave that much room round the shape
+  const MITER = 4, all = items.flatMap(i => i.pts), pad = Math.abs(d) * (sharp ? MITER : 1) + 1;
+  let x0 = Math.min(...all.map(p => p[0])) - pad, y0 = Math.min(...all.map(p => p[1])) - pad;
+  const x1 = Math.max(...all.map(p => p[0])) + pad, y1 = Math.max(...all.map(p => p[1])) + pad;
+  const k = Math.min(20, 4000 / Math.max(x1 - x0, y1 - y0)), W = Math.ceil((x1 - x0) * k) + 2, H = Math.ceil((y1 - y0) * k) + 2;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const c = cv.getContext("2d", {willReadFrequently:true});
+  c.setTransform(k, 0, 0, k, (1 - x0 * k), (1 - y0 * k));
+  const closed = new Path2D(), open = new Path2D();
+  for (const it of items){ const P = it.closed ? closed : open; it.pts.forEach(([x, y], i) => i ? P.lineTo(x, y) : P.moveTo(x, y)); if (it.closed) P.closePath(); }
+  c.fillStyle = c.strokeStyle = "#000";
+  c.lineJoin = sharp ? "miter" : "round"; c.miterLimit = MITER; c.lineCap = "round";
+  c.fill(closed, "nonzero");
+  c.lineWidth = 2 * Math.abs(d);
+  if (d > 0){ c.stroke(closed); c.stroke(open); }
+  else { c.globalCompositeOperation = "destination-out"; c.stroke(closed); }
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = "destination-out";
+  c.fillRect(0, 0, W, 1); c.fillRect(0, H - 1, W, 1); c.fillRect(0, 0, 1, H); c.fillRect(W - 1, 0, 1, H);   // keep loops closed
+  const A = c.getImageData(0, 0, W, H).data, v = (x, y) => A[(y * W + x) * 4 + 3], iso = 127.5;
+  // marching squares: each cell's inside runs, walked clockwise round the cell, give
+  // directed segments from where the run starts to where it ends (inside on the left)
+  const NH = W * H, next = new Map(), pos = new Map();
+  const hid = (x, y) => y * W + x, vid = (x, y) => NH + y * W + x;
+  for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++){
+    const q = [v(x, y), v(x + 1, y), v(x + 1, y + 1), v(x, y + 1)], ins = q.map(t => t >= iso);
+    if (ins[0] === ins[1] && ins[1] === ins[2] && ins[2] === ins[3]) continue;
+    // edge i runs from corner i to corner i+1 (clockwise: top, right, bottom, left)
+    const eid = [hid(x, y), vid(x + 1, y), hid(x, y + 1), vid(x, y)];
+    const at = i => { const p = q[i], r = q[(i + 1) % 4], t = (iso - p) / (r - p);
+      return [[x + t, y], [x + 1, y + t], [x + 1 - t, y + 1], [x, y + 1 - t]][i]; };
+    for (let i = 0; i < 4; i++){
+      if (ins[i] || !ins[(i + 1) % 4]) continue;            // edge i enters an inside run
+      let j = (i + 1) % 4; while (ins[(j + 1) % 4]) j = (j + 1) % 4;  // that run leaves on edge j
+      next.set(eid[i], eid[j]); if (!pos.has(eid[i])) pos.set(eid[i], at(i)); if (!pos.has(eid[j])) pos.set(eid[j], at(j));
+    }
+  }
+  const loops = [], done = new Set();
+  for (const s of next.keys()){
+    if (done.has(s)) continue;
+    const pts = []; let e = s;
+    while (e !== undefined && !done.has(e)){ done.add(e); const [px, py] = pos.get(e); pts.push([(px - 0.5) / k + x0, (py - 0.5) / k + y0]); e = next.get(e); }
+    if (pts.length > 3) loops.push(simplifyLoop(pts, 0.6 / k));
+  }
+  // drop antialiasing specks (a pixel or two left at a pinched tip)
+  return loops.filter(l => l.length > 2 && Math.abs(loopArea(l)) > Math.max(0.05, 4 / (k * k)));
+}
+function simplifyLoop(pts, tol){
+  // Douglas-Peucker on a closed loop (split at the point farthest from the first)
+  const far = pts.reduce((b, p, i) => Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]) > Math.hypot(pts[b][0] - pts[0][0], pts[b][1] - pts[0][1]) ? i : b, 0);
+  const dp = (a) => {
+    if (a.length < 3) return a;
+    const [ax, ay] = a[0], [bx, by] = a[a.length - 1], L = Math.hypot(bx - ax, by - ay) || 1e-9;
+    let m = 0, mi = 0;
+    for (let i = 1; i < a.length - 1; i++){ const dd = Math.abs((bx - ax) * (ay - a[i][1]) - (ax - a[i][0]) * (by - ay)) / L; if (dd > m){ m = dd; mi = i; } }
+    return m > tol ? dp(a.slice(0, mi + 1)).slice(0, -1).concat(dp(a.slice(mi))) : [a[0], a[a.length - 1]];
+  };
+  const one = dp(pts.slice(0, far + 1)), two = dp(pts.slice(far).concat([pts[0]]));
+  return one.slice(0, -1).concat(two.slice(0, -1));
+}
+const loopArea = l => l.reduce((s, p, i) => { const q = l[(i + 1) % l.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+function makeOffset(o, d, sharp, outerOnly){
+  const items = objectLoops(o);
+  if (!items.length) throw new Error("This object has no outline to offset.");
+  if (d < 0 && !items.some(i => i.closed)) throw new Error("A line has no inside: use a positive distance to outline it.");
+  let loops = offsetLoops(items, d, sharp);
+  if (!loops.length) throw new Error("Nothing is left at that distance: the shape is too small to shrink that far.");
+  if (outerOnly){
+    // keep loops wound like the biggest one (outer edges), drop holes
+    const big = loops.reduce((a, b) => Math.abs(loopArea(b)) > Math.abs(loopArea(a)) ? b : a), sg = Math.sign(loopArea(big));
+    loops = loops.filter(l => Math.sign(loopArea(l)) === sg);
+  }
+  const pts = loops.flat(), x0 = Math.min(...pts.map(p => p[0])), y0 = Math.min(...pts.map(p => p[1]));
+  const w = Math.max(...pts.map(p => p[0])) - x0, h = Math.max(...pts.map(p => p[1])) - y0;
+  return {id:uid(), type:"path", name:`Offset ${d > 0 ? "+" : ""}${d} mm`, x:r3(x0), y:r3(y0), w:r3(w), h:r3(h), rot:0, nat_w:w, nat_h:h,
+          paths:loops.map(l => [...l, l[0]].map(([x, y]) => [r3(x - x0), r3(y - y0)])), op:{...o.op}, ...(o.material ? {material:o.material} : {})};
+}
+F("offsetBtn").onclick = async () => {
+  const o = obj(sel); if (!o || o.type === "image") return;
+  const isLine = o.shape && o.shape.kind === "line", isText = o.type === "text";
+  const ok = await dialog("Offset outline", `<p>Makes a new outline this far outside the shape (positive) or inside it (negative), around the same centre. The original stays as it is.</p>
+    <div class="grid2">
+      <label class="f">Distance (mm)<input id="offD" type="number" step="0.5" value="${isLine ? 2 : 3}"></label>
+      <label class="f">How many<input id="offN" type="number" min="1" max="20" step="1" value="1"></label>
+      <label class="f">Corners<select id="offJ"><option value="round">Rounded</option><option value="sharp"${o.type === "rect" || (o.shape && o.shape.kind === "polygon") ? " selected" : ""}>Sharp</option></select></label>
+      <label class="f">New outline<select id="offM"><option value="same">Same operation (${OPS[o.op.mode]})</option><option value="cut"${isText ? " selected" : ""}>Cut</option><option value="score">Score</option><option value="off">Off (guide)</option></select></label>
+    </div>
+    <label class="chk" style="margin-top:8px"><input type="checkbox" id="offOuter"${isText ? " checked" : ""}> Outer edge only (no holes, e.g. inside letters)</label>
+    ${isLine ? "<p class='muted'>A line becomes a rounded slot this far either side of it.</p>" : ""}
+    <p class="muted">"How many" makes rings at 1×, 2×, 3×… the distance.</p>`,
+    [["Cancel", false], ["Make outline", true, "primary"]]);
+  if (!ok) return;
+  const d = parseFloat(F("offD").value), n = clamp(Math.round(+F("offN").value || 1), 1, 20), sharp = F("offJ").value === "sharp", m = F("offM").value, outer = F("offOuter").checked;
+  if (!isFinite(d) || !d) return toast("Enter a distance other than 0.", true);
+  snapshot();
+  const made = [];
+  try {
+    for (let i = 1; i <= n; i++){
+      const r = makeOffset(o, r3(d * i), sharp, outer);
+      if (m !== "same") r.op = m === "off" ? {...o.op, mode:"off"} : {mode:m, ...DEFAULT_OP[m]};
+      if (m !== "same") delete r.material;
+      made.push(r);
+    }
+  } catch(e){ history.pop(); return toast(e.message, true); }
+  D.objects.push(...made); sel = made[made.length - 1].id;
+  render(); inspector(); estimate(); autosave();
+  toast(`Made ${made.length} outline${made.length > 1 ? "s" : ""} ${d > 0 ? "outside" : "inside"} the shape.`);
+};
+// ---------------------------------------------------------------- material profiles
+// Saved per computer (settings.json next to the app's other settings), as
+// {name: {score:{power,speed,...}, cut:{...}, fill:{...}, image:{...}}}. An object remembers
+// which material it uses (o.material); picking a material or switching the operation loads
+// that material's settings for the operation.
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+const MAT_KEYS = ["power", "speed", "passes", "air", "density", "min_power", "image_mode", "dither", "scan"];
+let materials = {};
+const opOf = op => Object.fromEntries(MAT_KEYS.filter(k => op[k] !== undefined).map(k => [k, op[k]]));
+const sameOp = (a, b) => MAT_KEYS.every(k => (a[k] ?? null) === (b[k] ?? null));
+function matSummary(m){
+  return ["score","cut","fill","image"].filter(k => m[k]).map(k => `${OPS[k]} ${m[k].power}% · ${m[k].speed} mm/s${(m[k].passes || 1) > 1 ? ` · ${m[k].passes}×` : ""}`).join("  |  ") || "nothing saved yet";
+}
+function matSelect(o){
+  const s = F("lmat"), names = Object.keys(materials).sort((a, b) => a.localeCompare(b));
+  const prof = o.material && materials[o.material], edited = prof && prof[o.op.mode] && !sameOp(opOf(o.op), prof[o.op.mode]);
+  s.innerHTML = "";
+  s.append(new Option("None (this object's own settings)", ""));
+  for (const n of names) s.append(new Option(n + (n === o.material && edited ? " (changed)" : ""), n));
+  if (o.material && !prof) s.append(new Option(o.material + " (not saved on this computer)", o.material));
+  s.value = o.material || "";
+  F("matManage").disabled = !names.length;
+}
+async function saveMaterials(){ await api("/api/settings", {materials}); }
+F("lmat").onchange = () => {
+  const o = obj(sel); if (!o) return;
+  snapshot();
+  const n = F("lmat").value;
+  if (!n){ delete o.material; inspector(); autosave(); return; }
+  o.material = n;
+  const prof = materials[n] || {}, m = o.op.mode;
+  if (m !== "off" && prof[m]){ o.op = {...DEFAULT_OP[m], ...prof[m], mode:m}; if (o.type === "image") processImage(o); }
+  else if (m !== "off") toast(`"${n}" has no ${OPS[m]} settings yet. Set them here and click Save… to add them.`);
+  render(); inspector(); estimate(); autosave();
+};
+F("matSave").onclick = async () => {
+  const o = obj(sel); if (!o) return;
+  const m = o.op.mode;
+  if (m === "off") return toast("Pick Score, Cut, Fill or Image first: a material stores the settings for each operation.", true);
+  const names = Object.keys(materials).sort((a, b) => a.localeCompare(b));
+  const users = cur => D.objects.filter(x => x !== o && x.material === cur && x.op.mode === m).length;
+  const ok = await dialog("Save material", `<p>Saves this object's <b>${OPS[m]}</b> settings (${o.op.power}% power, ${o.op.speed} mm/s, ${o.op.passes || 1} pass${(o.op.passes || 1) > 1 ? "es" : ""}, air ${o.op.air ?? 100}%) to a material. Settings for its other operations are kept.</p>
+    <label class="f">Material name<input id="matName" list="matNames" value="${(o.material || "").replace(/"/g, "&quot;")}" placeholder="e.g. 3 mm birch plywood"></label>
+    <datalist id="matNames">${names.map(n => `<option value="${n.replace(/"/g, "&quot;")}">`).join("")}</datalist>
+    <label class="chk" style="margin-top:8px"><input type="checkbox" id="matAll" checked> Also update other ${OPS[m]} objects in this project that use it</label>`,
+    [["Cancel", false], ["Save", true, "primary"]]);
+  const name = (document.getElementById("matName") || {}).value?.trim(), all = (document.getElementById("matAll") || {}).checked;
+  if (!ok || !name) return;
+  snapshot();
+  materials[name] = {...(materials[name] || {}), [m]: opOf(o.op)};
+  o.material = name;
+  let n = 0;
+  if (all) for (const x of D.objects) if (x !== o && x.material === name && x.op.mode === m){ x.op = {...x.op, ...materials[name][m]}; if (x.type === "image") processImage(x); n++; }
+  try { await saveMaterials(); toast(`Saved ${OPS[m]} settings to "${name}".` + (n ? ` Updated ${n} other object${n > 1 ? "s" : ""}.` : "")); }
+  catch(e){ toast("Couldn't save the material: " + e.message, true); }
+  render(); inspector(); estimate(); autosave();
+};
+F("matManage").onclick = () => manageMaterials();
+async function manageMaterials(){
+  const names = Object.keys(materials).sort((a, b) => a.localeCompare(b));
+  const row = n => `<li><span><b>${esc(n)}</b><small>${esc(matSummary(materials[n]))}</small></span>
+      <button class="btn small" data-ren="${esc(n)}">Rename</button><button class="btn small" data-del="${esc(n)}">Delete</button></li>`;
+  const p = dialog("Materials", `<p class="muted">Saved on this computer. Export to copy them to another computer.</p>
+    <ul class="matlist">${names.map(row).join("") || "<li>No materials yet.</li>"}</ul>
+    <div class="row" style="margin-top:10px"><button class="btn small" id="matExport">Export…</button><button class="btn small" id="matImport">Import…</button>
+    <input type="file" id="matFile" accept=".json,application/json" hidden></div>`, [["Done", true, "primary"]]);
+  const body = $("#dlgBody");
+  body.onclick = async ev => {
+    const del = ev.target.dataset.del, ren = ev.target.dataset.ren;
+    if (del !== undefined){
+      if (!confirm(`Delete the material "${del}"? Objects using it keep their current settings.`)) return;
+      delete materials[del]; for (const x of D.objects) if (x.material === del) delete x.material;
+    } else if (ren !== undefined){
+      const nn = (prompt("New name", ren) || "").trim(); if (!nn || nn === ren) return;
+      if (materials[nn] && !confirm(`"${nn}" already exists. Replace it?`)) return;
+      materials[nn] = materials[ren]; delete materials[ren]; for (const x of D.objects) if (x.material === ren) x.material = nn;
+    } else if (ev.target.id === "matExport"){
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify({betterlaser_materials:1, materials}, null, 2)], {type:"application/json"}));
+      a.download = "materials.json"; a.click(); return;
+    } else if (ev.target.id === "matImport"){ F("matFile").click(); return; }
+    else return;
+    await saveMaterials().catch(e => toast(e.message, true)); $("#dlg").close(); inspector(); autosave(); manageMaterials();
+  };
+  F("matFile").onchange = async () => {
+    const f = F("matFile").files[0]; if (!f) return;
+    try {
+      const j = JSON.parse(await f.text()), m = j.materials || j;
+      if (typeof m !== "object" || Array.isArray(m)) throw new Error("not a materials file");
+      let n = 0; for (const [k, v] of Object.entries(m)) if (v && typeof v === "object"){ materials[k] = {...(materials[k] || {}), ...v}; n++; }
+      await saveMaterials(); toast(`Imported ${n} material${n === 1 ? "" : "s"}.`);
+    } catch(e){ toast("Couldn't import: " + e.message, true); return; }
+    $("#dlg").close(); inspector(); manageMaterials();
+  };
+  await p;
+}
 
 // ---------------------------------------------------------------- shapes, lines and wrapped text
 const SHAPE_DEFAULT = {kind:"polygon", sides:6, inner:45, radius:5};
@@ -1504,6 +1744,7 @@ async function loadDesign(){
   new ResizeObserver(() => fitView()).observe(svg);
   setTool("select");
   try { settings = await api("/api/settings"); } catch(e){}
+  materials = (settings && typeof settings.materials === "object" && settings.materials) || {};
   await loadFonts();
   rotaryUI();
   try { const saved = JSON.parse(localStorage.getItem("p2s.design") || "null"); if (saved && saved.objects){ D = saved; await loadDesign(); } } catch(e){}

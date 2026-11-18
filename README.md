@@ -16,11 +16,21 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Shapes:** rectangles, ellipses, lines (Shift snaps to 45°), polygons, stars, rounded
   rectangles and hearts, text from any installed TrueType font, imported SVG files,
   and rectangles/circles from xTool .xcs projects.
+- **Material profiles:** the *Material* menu in the Laser panel holds your tested settings
+  (power, speed, passes, air assist, line density, picture style) for each operation: Score,
+  Cut, Fill and Image. Set an object up, click *Save…* and name the material; pick it on any
+  object to load its settings, and switching Score/Cut/Fill/Image loads that operation's
+  settings. Edited values show "(changed)". *Manage…* renames, deletes, exports and imports
+  (materials.json, to copy them to another computer). Air assist now defaults to 100%.
 - **Picture clean-up:** in the picture panel, *Remove background* clears a plain background
   from the picture's edges inward (set how strict with *Colour match*); *Remove area* removes one
   clicked region of similar colour; *Eraser* and *Restore* are brushes (size in mm). Removed parts
   never burn. Undo works on every step and *Reset* brings the whole picture back. Only the parts
   that will burn are drawn on the bed; the rest of the picture box is see-through.
+- **Offset outline:** select a shape, text or line and click *Offset outline…* to make a new
+  outline a set distance outside (positive) or inside (negative) it, around the same centre:
+  rounded or sharp corners, one or several rings, outer edge only (a cut line around text), and
+  the new outline can be Cut, Score or a guide. A line becomes a rounded slot.
 - **Text boxes:** tick *Text box: wrap lines to fit the width* in the text panel and long text
   breaks onto new lines inside the box. Drag the box's side (or type W) to set the width; *Size*
   sets the letter height; the box's height follows the lines. *Align* works within the box.
