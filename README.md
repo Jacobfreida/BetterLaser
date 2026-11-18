@@ -55,6 +55,10 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
   it wraps each way, so you line up the object's centre line with the laser instead of guessing
   from the top edge as Studio does. *Line up by: Edge* keeps Studio's behaviour. One full turn is
   shown on the bed. Rotary projects from Studio (.xcs) import with their settings.
+- **Selecting several objects:** Ctrl+click (Cmd+click on a Mac) adds an object to the selection
+  or takes it out; Ctrl+A selects everything. Drag any of them to move them together (snap uses
+  the box around the group), and arrow keys, Delete and Ctrl+D work on all. The Laser panel then
+  changes all of them at once: operation, power, speed, passes, air, material and so on.
 - **Magnetic snap:** the magnet button by the zoom controls turns snapping on and off, with a
   grid size of 1–25 mm. While moving, drawing or resizing, objects snap to other objects' edges
   and centres and to the bed's edges and centre (a pink guide line shows the match), otherwise

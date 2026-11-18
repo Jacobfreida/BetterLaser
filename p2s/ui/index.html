@@ -191,7 +191,7 @@ dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
 <aside id="side">
   <section id="objSec">
-    <h2 id="objTitle">Nothing selected</h2>
+    <h2 id="objTitle">Nothing selected</h2><p class="muted hidden" id="multiNote" style="margin:-4px 0 8px;line-height:1.4"></p>
     <p class="empty" id="objEmpty">Draw a shape, add text or a picture with the tools on the left. Click an object to edit its size and laser settings.</p>
     <div id="objFields" class="hidden">
       <div class="grid2">
@@ -335,6 +335,13 @@ const ROT_X0 = 50, ROT_X1 = 550;           // the rotary's working length (Studi
 const rotary = () => (D.rotary && D.rotary.on) ? D.rotary : null;
 const circumference = () => { const r = rotary(); return r && r.diameter > 0 ? Math.PI * r.diameter : null; };
 let sel = null, tool = "select", status = {connected:false}, settings = {};
+// Selection: `sel` is the main (last picked) object; selIds holds every selected id
+// (Ctrl/Cmd+click adds or removes one). Moving, deleting, duplicating, arrow keys and the
+// laser settings work on all of them; size and text fields need a single object.
+let selIds = [];
+function setSel(id){ sel = id || null; selIds = sel ? [sel] : []; }
+const selected = () => selIds.map(obj).filter(Boolean);
+const multi = () => selIds.length > 1;
 let view = {x:-10, y:-10, w:BED_W+20, h:BED_H+20};
 const imgCache = new Map();       // id -> HTMLImageElement (original picture)
 const procCache = new Map();      // id -> {key, cols, rows, data(Uint8Array), url}
@@ -349,7 +356,7 @@ const r3 = v => Math.round(v * 1000) / 1000;
 function snapshot(){ history.push(JSON.stringify(D)); if (history.length > 80) history.shift(); future = []; autosave(); }
 function undo(){ if (!history.length) return; future.push(JSON.stringify(D)); D = JSON.parse(history.pop()); afterLoad(); }
 function redo(){ if (!future.length) return; history.push(JSON.stringify(D)); D = JSON.parse(future.pop()); afterLoad(); }
-function afterLoad(){ if (sel && !obj(sel)) sel = null; rotaryUI(); for (const o of D.objects) if (o.type === "image"){ if (imgCache.has(o.id)) processImage(o); else ensureImage(o); } render(); inspector(); autosave(); }
+function afterLoad(){ selIds = selIds.filter(id => obj(id)); if (sel && !obj(sel)) sel = selIds[selIds.length - 1] || null; rotaryUI(); for (const o of D.objects) if (o.type === "image"){ if (imgCache.has(o.id)) processImage(o); else ensureImage(o); } render(); inspector(); autosave(); }
 const obj = id => D.objects.find(o => o.id === id);
 
 function autosave(){ try { localStorage.setItem("p2s.design", JSON.stringify(D, (k, v) => k === "_outline" ? undefined : v)); } catch(e) {} }
@@ -419,7 +426,8 @@ function render(){
   drawRotary();
   for (const o of D.objects) drawObject(o);
   drawGuides();
-  if (sel && obj(sel)) drawSelection(obj(sel));
+  if (multi()) for (const o of selected()) drawSelection(o, true);
+  else if (sel && obj(sel)) drawSelection(obj(sel));
   if (drag && drag.kind === "draw" && tool === "line") el("line", {x1:drag.x0, y1:drag.y0, x2:drag.x1, y2:drag.y1, stroke:"#fff", "stroke-width":px() * 1.5, "stroke-dasharray":`${px() * 4} ${px() * 3}`}, svg);
   else if (drag && drag.kind === "draw") el("rect", {x:Math.min(drag.x0, drag.x1), y:Math.min(drag.y0, drag.y1), width:Math.abs(drag.x1 - drag.x0), height:Math.abs(drag.y1 - drag.y0), fill:"none", stroke:"#fff", "stroke-dasharray":`${px() * 4} ${px() * 3}`, "stroke-width":px()}, svg);
   if (head.known){
@@ -511,10 +519,10 @@ function drawObject(o){
   }
 }
 
-function drawSelection(o){
+function drawSelection(o, outlineOnly){
   const g = el("g", {transform:objTransform(o)}, svg), hs = px() * 9;
   el("rect", {x:0, y:0, width:o.w, height:o.h, fill:"none", stroke:"#F2B400", "stroke-width":px() * 1.4, "stroke-dasharray":`${px() * 5} ${px() * 3}`}, g);
-  if (isWrapped(o)) return;
+  if (isWrapped(o) || outlineOnly) return;
   for (const [cx, cy, c] of [[0,0,"nw"],[o.w,0,"ne"],[0,o.h,"sw"],[o.w,o.h,"se"]])
     el("rect", {x:cx - hs / 2, y:cy - hs / 2, width:hs, height:hs, fill:"#fff", stroke:"#20262E", "stroke-width":px(), "data-handle":c, style:`cursor:${c}-resize`}, g);
   if (o.type !== "image"){
@@ -546,15 +554,24 @@ svg.addEventListener("pointerdown", ev => {
   if (tool === "rotline"){ snapshot(); D.rotary.axis_y = Math.round(Math.min(BED_H, Math.max(0, p.y)) * 2) / 2; setTool("select"); rotaryUI(); render(); estimate(); autosave(); return; }
   if (tool === "rect" || tool === "ellipse" || tool === "shape" || tool === "line"){ if (snapOn(ev)) p = snapPt(p); guides = []; drag = {kind:"draw", x0:p.x, y0:p.y, x1:p.x, y1:p.y}; return; }
   if (tool === "text"){ addText(p.x, p.y); setTool("select"); return; }
-  if (handle && sel){ const o = obj(sel); snapshot(); drag = {kind: handle === "rot" ? "rot" : "resize", handle, o, start:clone(o), p0:p}; return; }
+  if (handle && sel && !multi()){ const o = obj(sel); snapshot(); drag = {kind: handle === "rot" ? "rot" : "resize", handle, o, start:clone(o), p0:p}; return; }
   const gEl = ev.target.closest && ev.target.closest("[data-id]");
   if (gEl){
-    sel = gEl.getAttribute("data-id"); const o = obj(sel); snapshot();
+    const id = gEl.getAttribute("data-id");
+    if (ev.ctrlKey || ev.metaKey){
+      // Ctrl/Cmd+click: add to or take out of the selection
+      if (selIds.includes(id)){ selIds = selIds.filter(x => x !== id); sel = selIds[selIds.length - 1] || null; inspector(); render(); return; }
+      selIds = [...selIds, id]; sel = id;
+    } else if (!selIds.includes(id)) setSel(id);
+    else sel = id;                                   // clicked inside the selection: keep it, drag them all
+    const o = obj(sel); snapshot();
+    if (multi()){ drag = {kind:"move", o, p0:p, start:{x:o.x, y:o.y}, group:selected().map(g => ({o:g, x:g.x, y:g.y})), moved:false}; inspector(); render(); return; }
     if (isWrapped(o)){ const c = wrapCentre(o); drag = {kind:"wrap", o, c, a0:Math.atan2(p.y - c[1], p.x - c[0]), shift0:+(o.text.wrap.shift || 0), moved:false}; }
     else drag = {kind:"move", o, p0:p, start:{x:o.x, y:o.y}, moved:false};
     inspector(); render(); return;
   }
-  sel = null; inspector(); render();
+  if (!(ev.ctrlKey || ev.metaKey)) setSel(null);
+  inspector(); render();
   drag = {kind:"pan", sx:ev.clientX, sy:ev.clientY, v:{...view}};
 });
 svg.addEventListener("pointermove", ev => {
@@ -584,7 +601,9 @@ svg.addEventListener("pointermove", ev => {
     if (!drag.moved && Math.hypot(p.x - drag.p0.x, p.y - drag.p0.y) < px() * 3) return;
     let nx = drag.start.x + p.x - drag.p0.x, ny = drag.start.y + p.y - drag.p0.y;
     if (snapOn(ev)) [nx, ny] = snapMove(o, nx, ny); else guides = [];
-    o.x = r3(nx); o.y = r3(ny); drag.moved = true; render(); inspectorValues(); return;
+    if (drag.group){ const dx = nx - drag.start.x, dy = ny - drag.start.y; for (const g of drag.group){ g.o.x = r3(g.x + dx); g.o.y = r3(g.y + dy); } }
+    else { o.x = r3(nx); o.y = r3(ny); }
+    drag.moved = true; render(); inspectorValues(); return;
   }
   if (drag.kind === "rot"){ const cx = o.x + o.w / 2, cy = o.y + o.h / 2; let a = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90; if (ev.shiftKey) a = Math.round(a / 15) * 15; o.rot = Math.round(((a % 360) + 360) % 360 * 10) / 10; render(); inspectorValues(); return; }
   if (drag.kind === "resize"){
@@ -609,7 +628,7 @@ svg.addEventListener("pointerup", ev => {
   const d = drag; drag = null;
   if (d.kind === "paint"){ commitMask(d.o); return; }
   if (d.kind === "draw" && tool === "line"){
-    if (Math.hypot(d.x1 - d.x0, d.y1 - d.y0) > 1){ snapshot(); const o = makeLine(d.x0, d.y0, d.x1, d.y1); D.objects.push(o); sel = o.id; }
+    if (Math.hypot(d.x1 - d.x0, d.y1 - d.y0) > 1){ snapshot(); const o = makeLine(d.x0, d.y0, d.x1, d.y1); D.objects.push(o); setSel(o.id); }
     setTool("select"); inspector(); render(); estimate(); autosave(); return;
   }
   if (d.kind === "draw"){
@@ -618,7 +637,7 @@ svg.addEventListener("pointerup", ev => {
       snapshot();
       const o = {id:uid(), type:tool === "shape" ? "path" : tool, x:r3(x), y:r3(y), w:r3(w), h:r3(h), rot:0, op:{mode:"score", ...DEFAULT_OP.score}};
       if (tool === "shape"){ o.shape = {...SHAPE_DEFAULT, kind:lastShapeKind}; regenShape(o); }
-      D.objects.push(o); sel = o.id;
+      D.objects.push(o); setSel(o.id);
     }
     setTool("select"); inspector(); render(); autosave(); return;
   }
@@ -629,7 +648,10 @@ svg.addEventListener("pointerup", ev => {
     o.text.box_width = r3(Math.max(o.w, o.text.size || 1));
     refreshText(o, false).then(() => { o.x = top.x; o.y = top.y; render(); inspectorValues(); estimate(); autosave(); });
   }
-  if (["move","resize","rot"].includes(d.kind)){ if (d.o.type === "image") processImage(d.o); rewrapFor(d.o); estimate(); autosave(); }
+  if (["move","resize","rot"].includes(d.kind)){
+    for (const m of d.group ? d.group.map(g => g.o) : [d.o]){ if (m.type === "image" && !d.group) processImage(m); rewrapFor(m); }
+    estimate(); autosave();
+  }
   if (d.kind === "wrap" && d.moved){ rewrapSoon(d.o); inspector(); estimate(); autosave(); }
   render();
 });
@@ -645,18 +667,24 @@ document.addEventListener("keydown", ev => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "y" && !typing){ ev.preventDefault(); redo(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "d" && !typing && sel){ ev.preventDefault(); duplicate(); return; }
   if (typing) return;
-  if ((ev.key === "Delete" || ev.key === "Backspace") && sel){ snapshot(); unwrapFor(sel); D.objects = D.objects.filter(o => o.id !== sel); sel = null; inspector(); render(); estimate(); return; }
-  if (ev.key === "Escape"){ sel = null; setTool("select"); showHeadPanel(false); inspector(); render(); return; }
+  if ((ev.key === "Delete" || ev.key === "Backspace") && sel){ snapshot(); const gone = new Set(selIds); for (const id of gone) unwrapFor(id); D.objects = D.objects.filter(o => !gone.has(o.id)); setSel(null); inspector(); render(); estimate(); autosave(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a"){ ev.preventDefault(); selIds = D.objects.map(o => o.id); sel = selIds[selIds.length - 1] || null; inspector(); render(); return; }
+  if (ev.key === "Escape"){ setSel(null); setTool("select"); showHeadPanel(false); inspector(); render(); return; }
   const arrows = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
-  if (arrows[ev.key] && sel){ ev.preventDefault(); const o = obj(sel), s = ev.shiftKey ? 10 : 1; snapshot(); o.x = r3(o.x + arrows[ev.key][0] * s); o.y = r3(o.y + arrows[ev.key][1] * s); render(); inspectorValues(); return; }
+  if (arrows[ev.key] && sel){ ev.preventDefault(); const s = ev.shiftKey ? 10 : 1; snapshot(); for (const o of selected()){ o.x = r3(o.x + arrows[ev.key][0] * s); o.y = r3(o.y + arrows[ev.key][1] * s); } render(); inspectorValues(); autosave(); return; }
   const keys = {v:"select", r:"rect", e:"ellipse", t:"text", l:"line", p:"shape"};
   if (keys[ev.key.toLowerCase()]) setTool(keys[ev.key.toLowerCase()]);
 });
 document.addEventListener("keyup", ev => { if (ev.key === " ") spaceDown = false; });
 
-function duplicate(){ const o = obj(sel); if (!o) return; snapshot(); const c = clone(o); c.id = uid(); c.x += 5; c.y += 5; if (o.type === "image"){ imgCache.set(c.id, imgCache.get(o.id)); } D.objects.push(c); sel = c.id; if (c.type === "image") processImage(c); render(); inspector(); }
+function duplicate(){
+  const src = selected(); if (!src.length) return; snapshot();
+  const made = src.map(o => { const c = clone(o); c.id = uid(); c.x += 5; c.y += 5; if (o.type === "image") imgCache.set(c.id, imgCache.get(o.id)); D.objects.push(c); if (c.type === "image") processImage(c); return c; });
+  selIds = made.map(c => c.id); sel = selIds[selIds.length - 1];
+  render(); inspector(); estimate(); autosave();
+}
 
-const HINTS = {select:"Drag to move · drag empty space to pan · scroll to zoom · Delete removes · Ctrl+D duplicates",
+const HINTS = {select:"Drag to move · Ctrl+click selects several · drag empty space to pan · scroll to zoom · Delete removes · Ctrl+D duplicates",
   rect:"Drag on the bed to draw a rectangle (Shift for a square)", ellipse:"Drag on the bed to draw an ellipse (Shift for a circle)",
   text:"Click on the bed where the text should go",
   line:"Drag to draw a line (Shift snaps to 45°)", shape:"Drag on the bed to draw a shape (Shift keeps it even). Change the shape on the right.", measure:"Click the spot on the material to measure. The head moves so its height sensor (right of the laser) is over it.",
@@ -670,8 +698,21 @@ for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => setT
 
 // ---------------------------------------------------------------- inspector
 const F = id => document.getElementById(id);
+const modeAllowed = (o, m) => o.type === "image" ? (m === "image" || m === "off") : !(m === "image" || (m === "fill" && o.shape && o.shape.kind === "line"));
 function inspector(){
   const o = sel && obj(sel);
+  F("multiNote").classList.toggle("hidden", !multi());
+  if (o && multi()){
+    // several objects: only the laser settings, which then apply to all of them
+    const all = selected();
+    $("#objEmpty").classList.add("hidden"); $("#objFields").classList.add("hidden"); $("#laserSec").classList.remove("hidden");
+    $("#objTitle").textContent = `${all.length} objects selected`;
+    F("multiNote").textContent = "Laser settings below change all of them. Drag, arrow keys, Delete and Ctrl+D work on all. Ctrl+click an object to add or remove it.";
+    for (const b of document.querySelectorAll("#modes button")){
+      const m = b.dataset.m; b.setAttribute("aria-pressed", all.every(x => x.op.mode === m)); b.disabled = !all.every(x => modeAllowed(x, m));
+    }
+    inspectorValues(); return;
+  }
   $("#objEmpty").classList.toggle("hidden", !!o); $("#objFields").classList.toggle("hidden", !o); $("#laserSec").classList.toggle("hidden", !o);
   $("#objTitle").textContent = o ? (o.shape ? {line:"Line", polygon:"Polygon", star:"Star", rounded:"Rounded rectangle", heart:"Heart"}[o.shape.kind] : {rect:"Rectangle", ellipse:"Ellipse", text:isWrapped(o) ? "Wrapped text" : "Text", image:"Picture", path:(o.name && o.name.startsWith("Offset")) ? "Offset outline (" + o.name.slice(7) + ")" : "Imported shape"}[o.type]) : "Nothing selected";
   if (!o) return;
@@ -698,7 +739,7 @@ function inspector(){
   if (o.type === "image"){ const a = o.adj || {}; F("ibright").value = a.brightness || 0; F("icontrast").value = a.contrast || 0; F("igamma").value = a.gamma || 1; F("iinvert").checked = !!a.invert; const pc = procCache.get(o.id); $("#imgprev").src = pc ? pc.url : ""; }
   for (const b of document.querySelectorAll("#modes button")){
     const m = b.dataset.m; b.setAttribute("aria-pressed", o.op.mode === m);
-    b.disabled = o.type === "image" ? !(m === "image" || m === "off") : (m === "image" || (m === "fill" && o.shape && o.shape.kind === "line"));
+    b.disabled = !modeAllowed(o, m);
   }
   inspectorValues();
 }
@@ -727,18 +768,19 @@ function bindNum(id, fn, live){
   const inp = F(id);
   const apply = final => {
     clearTimeout(inp._t); inp._t = null;
-    const o = obj(inp._target ?? sel); if (!o) return;
+    const ids = inp._group || [inp._target ?? sel], targets = ids.map(obj).filter(Boolean); if (!targets.length) return;
     const v = parseFloat(inp.value);
     if (!isFinite(v)){ if (final) inspectorValues(); return; }
     if (!inp._snapped){ snapshot(); inp._snapped = true; }
-    fn(o, v); render(); estimate(); autosave();
-    if (final){ inp._snapped = false; inp._target = undefined; inspectorValues(); }
+    for (const o of targets) fn(o, v);
+    render(); estimate(); autosave();
+    if (final){ inp._snapped = false; inp._target = undefined; inp._group = undefined; inspectorValues(); }
   };
-  inp.addEventListener("focus", () => { inp._target = sel; inp._snapped = false; });
+  inp.addEventListener("focus", () => { inp._target = sel; inp._group = multi() ? [...selIds] : undefined; inp._snapped = false; });
   if (live) inp.addEventListener("input", () => { clearTimeout(inp._t); inp._t = setTimeout(() => apply(false), 300); });
   // a pending live edit that never got a change event (e.g. the window lost focus) still counts
   inp.addEventListener("change", () => apply(true));
-  inp.addEventListener("blur", () => { if (inp._t) apply(true); inp._target = undefined; });
+  inp.addEventListener("blur", () => { if (inp._t) apply(true); inp._target = undefined; inp._group = undefined; });
 }
 // Clicking on the bed or the tool rail doesn't take focus away from a field by itself;
 // do it first, so whatever was typed is saved before the click changes the selection.
@@ -757,13 +799,16 @@ bindNum("lpower", (o, v) => o.op.power = clamp(v, 1, 100), true); bindNum("lspee
 bindNum("lpasses", (o, v) => o.op.passes = clamp(Math.round(v), 1, 50), true); bindNum("lair", (o, v) => o.op.air = clamp(v, 0, 100), true);
 bindNum("lminpower", (o, v) => o.op.min_power = clamp(v, 0, o.op.power), true);
 bindNum("ldensity", (o, v) => { o.op.density = clamp(v, 10, 300); if (o.type === "image") processImage(o); }, true);
-F("lbidir").onchange = () => { const o = obj(sel); snapshot(); o.op.scan = F("lbidir").checked ? "zMode" : "oneWay"; };
-F("imode").onchange = () => { const o = obj(sel); snapshot(); const v = F("imode").value; if (v === "grayscale") o.op.image_mode = "grayscale"; else if (v === "threshold") o.op.image_mode = "threshold"; else { o.op.image_mode = "dither"; o.op.dither = v; } processImage(o); inspectorValues(); };
+F("lbidir").onchange = () => { snapshot(); for (const o of selected()) o.op.scan = F("lbidir").checked ? "zMode" : "oneWay"; estimate(); autosave(); };
+F("imode").onchange = () => { snapshot(); for (const o of selected().filter(x => x.op.mode === "image")){ const v = F("imode").value; if (v === "grayscale") o.op.image_mode = "grayscale"; else if (v === "threshold") o.op.image_mode = "threshold"; else { o.op.image_mode = "dither"; o.op.dither = v; } processImage(o); inspectorValues(); } };
 for (const b of document.querySelectorAll("#modes button")) b.onclick = () => {
-  const o = obj(sel); if (!o || b.disabled) return; snapshot(); const m = b.dataset.m;
-  const keep = {...o.op}, prof = o.material && (materials[o.material] || {})[m];
-  o.op = m === "off" ? {...keep, mode:"off"} : prof ? {...DEFAULT_OP[m], ...prof, mode:m} : {...DEFAULT_OP[m], ...(keep.mode === m || keep.mode === "off" ? keep : {}), mode:m};
-  if (o.type === "image" && m === "image") processImage(o);
+  if (!sel || b.disabled) return; snapshot(); const m = b.dataset.m;
+  for (const o of selected()){
+    if (!modeAllowed(o, m)) continue;
+    const keep = {...o.op}, prof = o.material && (materials[o.material] || {})[m];
+    o.op = m === "off" ? {...keep, mode:"off"} : prof ? {...DEFAULT_OP[m], ...prof, mode:m} : {...DEFAULT_OP[m], ...(keep.mode === m || keep.mode === "off" ? keep : {}), mode:m};
+    if (o.type === "image" && m === "image") processImage(o);
+  }
   render(); inspector(); estimate(); autosave();
 };
 let textTimer = null;
@@ -832,8 +877,8 @@ function bboxOf(o){
   return {x0:cx - w / 2, x1:cx + w / 2, y0:cy - h / 2, y1:cy + h / 2, cx, cy};
 }
 function snapTargets(skip){
-  const xs = [0, BED_W / 2, BED_W], ys = [0, BED_H / 2, BED_H];
-  for (const t of D.objects){ if (t.id === skip) continue; const b = bboxOf(t); xs.push(b.x0, b.cx, b.x1); ys.push(b.y0, b.cy, b.y1); }
+  const xs = [0, BED_W / 2, BED_W], ys = [0, BED_H / 2, BED_H], moving = new Set(skip === sel && multi() ? selIds : [skip]);
+  for (const t of D.objects){ if (moving.has(t.id)) continue; const b = bboxOf(t); xs.push(b.x0, b.cx, b.x1); ys.push(b.y0, b.cy, b.y1); }
   return {xs, ys};
 }
 // best shift (within thr) that puts one of `vals` on one of `targets`
@@ -843,7 +888,14 @@ function nearest(vals, targets, thr){
   return best;
 }
 function snapMove(o, nx, ny){
-  const thr = px() * 7, b = bboxOf({...o, x:nx, y:ny}), T = snapTargets(o.id), g = snap.grid;
+  // a group snaps by the box around all of it
+  let b = bboxOf({...o, x:nx, y:ny});
+  if (multi() && o.id === sel){
+    const dx = nx - o.x, dy = ny - o.y, bs = selected().map(q => bboxOf({...q, x:q.x + dx, y:q.y + dy}));
+    b = {x0:Math.min(...bs.map(q => q.x0)), x1:Math.max(...bs.map(q => q.x1)), y0:Math.min(...bs.map(q => q.y0)), y1:Math.max(...bs.map(q => q.y1))};
+    b.cx = (b.x0 + b.x1) / 2; b.cy = (b.y0 + b.y1) / 2;
+  }
+  const thr = px() * 7, T = snapTargets(o.id), g = snap.grid;
   guides = [];
   const sx = nearest([b.x0, b.cx, b.x1], T.xs, thr), sy = nearest([b.y0, b.cy, b.y1], T.ys, thr);
   if (sx){ nx += sx.d; guides.push({x:sx.at}); } else nx += Math.round(b.x0 / g) * g - b.x0;
@@ -996,7 +1048,7 @@ F("offsetBtn").onclick = async () => {
       made.push(r);
     }
   } catch(e){ history.pop(); return toast(e.message, true); }
-  D.objects.push(...made); sel = made[made.length - 1].id;
+  D.objects.push(...made); setSel(made[made.length - 1].id);
   render(); inspector(); estimate(); autosave();
   toast(`Made ${made.length} outline${made.length > 1 ? "s" : ""} ${d > 0 ? "outside" : "inside"} the shape.`);
 };
@@ -1025,14 +1077,17 @@ function matSelect(o){
 }
 async function saveMaterials(){ await api("/api/settings", {materials}); }
 F("lmat").onchange = () => {
-  const o = obj(sel); if (!o) return;
+  if (!sel) return;
   snapshot();
-  const n = F("lmat").value;
-  if (!n){ delete o.material; inspector(); autosave(); return; }
-  o.material = n;
-  const prof = materials[n] || {}, m = o.op.mode;
-  if (m !== "off" && prof[m]){ o.op = {...DEFAULT_OP[m], ...prof[m], mode:m}; if (o.type === "image") processImage(o); }
-  else if (m !== "off") toast(`"${n}" has no ${OPS[m]} settings yet. Set them here and click Save… to add them.`);
+  const n = F("lmat").value, missing = new Set();
+  for (const o of selected()){
+    if (!n){ delete o.material; continue; }
+    o.material = n;
+    const prof = materials[n] || {}, m = o.op.mode;
+    if (m !== "off" && prof[m]){ o.op = {...DEFAULT_OP[m], ...prof[m], mode:m}; if (o.type === "image") processImage(o); }
+    else if (m !== "off") missing.add(OPS[m]);
+  }
+  if (missing.size) toast(`"${n}" has no ${[...missing].join(" / ")} settings yet. Set them here and click Save… to add them.`);
   render(); inspector(); estimate(); autosave();
 };
 F("matSave").onclick = async () => {
@@ -1181,7 +1236,7 @@ async function addText(x, y){
   if (!fonts.length){ toast("No usable fonts were found on this computer.", true); return; }
   snapshot();
   const o = {id:uid(), type:"text", x:r3(x), y:r3(y), w:10, h:10, rot:0, text:{content:"Text", font:defaultFont(), size:20, align:"left"}, op:{mode:"score", ...DEFAULT_OP.score}};
-  await refreshText(o, false); D.objects.push(o); sel = o.id; render(); inspector(); estimate();
+  await refreshText(o, false); D.objects.push(o); setSel(o.id); render(); inspector(); estimate();
   setTimeout(() => { F("ttext").focus(); F("ttext").select(); }, 30);
 }
 
@@ -1194,7 +1249,7 @@ F("imgFile").onchange = async () => {
   let w = 80, h = 80 * im.naturalHeight / im.naturalWidth; if (h > 80){ h = 80; w = 80 * im.naturalWidth / im.naturalHeight; }
   snapshot();
   const o = {id:uid(), type:"image", name:file.name, src:url, x:20, y:20, w:r3(w), h:r3(h), rot:0, adj:{brightness:0, contrast:0, gamma:1, invert:false}, op:{mode:"image", ...DEFAULT_OP.image}};
-  imgCache.set(o.id, im); D.objects.push(o); sel = o.id; await processImage(o); inspector(); render(); estimate();
+  imgCache.set(o.id, im); D.objects.push(o); setSel(o.id); await processImage(o); inspector(); render(); estimate();
 };
 function loadImg(url){ return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Couldn't read that picture")); i.src = url; }); }
 // ---------------------------------------------------------------- picture masks (eraser / background)
@@ -1398,7 +1453,7 @@ function importSVG(text, name){
   const local = paths.map(p => p.map(([x, y]) => [r3(x - x0), r3(y - y0)]));
   snapshot();
   const o = {id:uid(), type:"path", name, paths:local, nat_w:Math.max(x1 - x0, 0.01), nat_h:Math.max(y1 - y0, 0.01), x:20, y:20, w:r3(Math.max(x1 - x0, 0.01)), h:r3(Math.max(y1 - y0, 0.01)), rot:0, op:{mode:"score", ...DEFAULT_OP.score}};
-  D.objects.push(o); sel = o.id; inspector();
+  D.objects.push(o); setSel(o.id); inspector();
   toast(`Imported ${name}: ${paths.length} path(s), ${r3(o.w)} × ${r3(o.h)} mm`);
 }
 
@@ -1732,9 +1787,9 @@ F("openFile").onchange = async () => {
   try { const j = JSON.parse(await file.text()); snapshot(); D = j.design || j; await loadDesign(); toast(`Opened ${file.name}`); }
   catch(e){ toast("Couldn't open that file: " + e.message, true); }
 };
-$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[], rotary:D.rotary}; rotaryUI(); sel = null; render(); inspector(); estimate(); };
+$("#newBtn").onclick = async () => { if (D.objects.length && !(await dialog("Start a new project?", "<p>This clears the bed. Save first if you want to keep it.</p>", [["Cancel", false], ["Clear the bed", true, "primary"]]))) return; snapshot(); D = {focal:D.focal, fan_gear:3, purifier_gear:4, objects:[], rotary:D.rotary}; rotaryUI(); setSel(null); render(); inspector(); estimate(); };
 async function loadDesign(){
-  sel = null; F("focal").value = D.focal ?? ""; rotaryUI();
+  setSel(null); F("focal").value = D.focal ?? ""; rotaryUI();
   for (const o of D.objects){ if (o.type === "text") await refreshText(o, true); if (o.type === "image"){ imgCache.delete(o.id); await ensureImage(o); } }
   render(); inspector(); estimate(); autosave();
 }
