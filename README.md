@@ -16,6 +16,12 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
 - **Shapes:** rectangles, ellipses, lines (Shift snaps to 45°), polygons, stars, rounded
   rectangles and hearts, text from any installed TrueType font, imported SVG files,
   and rectangles/circles from xTool .xcs projects.
+- **Material profiles:** the *Material* menu in the Laser panel holds your tested settings
+  (power, speed, passes, air assist, line density, picture style) for each operation: Score,
+  Cut, Fill and Image. Set an object up, click *Save…* and name the material; pick it on any
+  object to load its settings, and switching Score/Cut/Fill/Image loads that operation's
+  settings. Edited values show "(changed)". *Manage…* renames, deletes, exports and imports
+  (materials.json, to copy them to another computer). Air assist now defaults to 100%.
 - **Picture clean-up:** in the picture panel, *Remove background* clears a plain background
   from the picture's edges inward (set how strict with *Colour match*); *Remove area* removes one
   clicked region of similar colour; *Eraser* and *Restore* are brushes (size in mm). Removed parts
