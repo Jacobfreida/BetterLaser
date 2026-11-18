@@ -21,6 +21,10 @@ Then click **Connect** (the address box says `usb` for the USB-C cable).
   clicked region of similar colour; *Eraser* and *Restore* are brushes (size in mm). Removed parts
   never burn. Undo works on every step and *Reset* brings the whole picture back. Only the parts
   that will burn are drawn on the bed; the rest of the picture box is see-through.
+- **Offset outline:** select a shape, text or line and click *Offset outline…* to make a new
+  outline a set distance outside (positive) or inside (negative) it, around the same centre:
+  rounded or sharp corners, one or several rings, outer edge only (a cut line around text), and
+  the new outline can be Cut, Score or a guide. A line becomes a rounded slot.
 - **Text boxes:** tick *Text box: wrap lines to fit the width* in the text panel and long text
   breaks onto new lines inside the box. Drag the box's side (or type W) to set the width; *Size*
   sets the letter height; the box's height follows the lines. *Align* works within the box.
